@@ -6,6 +6,7 @@ from typing import Any, AsyncGenerator, Generator
 from langchain_aws import ChatBedrockConverse
 from pydantic import ValidationError
 from rich.console import Console
+from rich.prompt import Prompt
 
 from agents.base_agent import BaseAgent
 from common.models import Action, BaseTool, Message
@@ -13,10 +14,9 @@ from common.utils import extract_json_from_text
 from conversation_manager.base_conversation_manager import BaseConversationManager
 from tools.send_message import print_message, send_message
 
-
 MAX_AGENT_LOOPS = 28
 console = Console()
-
+prompt = Prompt()
 
 class KrishnaAgent(BaseAgent):
 
@@ -50,11 +50,30 @@ class KrishnaAgent(BaseAgent):
             "output_tokens": 0,
             "total_tokens": 0,
         }
+        self.currently_executing: str | None = "None"
+        self.user_choices: dict[str, bool] = {}
 
     async def stream(self, prompt: Any) -> AsyncGenerator[str, None]:
         yield "Streaming response part 1..."
         yield "Streaming response part 2..."
 
+    def _update_usage_metrics(self, agent_message: Any) -> None:
+        usage = getattr(agent_message, "usage_metadata", None)
+        if isinstance(usage, dict):
+            input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+            output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+            total_tokens = int(usage.get("total_tokens") or (input_tokens + output_tokens))
+
+            self.last_usage = {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+            }
+
+            self.usage_totals["input_tokens"] += input_tokens
+            self.usage_totals["output_tokens"] += output_tokens
+            self.usage_totals["total_tokens"] += total_tokens
+    
     def send_message(self, user_message: str) -> Generator[str, None]:
         self.conversation_manager.add_message(Message(role="user", content=user_message))
 
@@ -70,23 +89,9 @@ class KrishnaAgent(BaseAgent):
                 return
 
             prompt = self.build_prompt(user_message)
-            agent_message = self.llm.invoke(prompt)
-
-            usage = getattr(agent_message, "usage_metadata", None)
-            if isinstance(usage, dict):
-                input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
-                output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
-                total_tokens = int(usage.get("total_tokens") or (input_tokens + output_tokens))
-
-                self.last_usage = {
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "total_tokens": total_tokens,
-                }
-
-                self.usage_totals["input_tokens"] += input_tokens
-                self.usage_totals["output_tokens"] += output_tokens
-                self.usage_totals["total_tokens"] += total_tokens
+            with console.status("[bold cyan]Thinking...[/]", spinner="dots"):
+                agent_message = self.llm.invoke(prompt)
+            self._update_usage_metrics(agent_message)
 
             if not isinstance(agent_message.content, str):
                 failure = "Model returned a non-textual response. Unable to continue."
@@ -149,6 +154,12 @@ class KrishnaAgent(BaseAgent):
                 continue
 
             try:
+                if action.tool.tool_name not in {"print_message", "send_message"}:
+                    allow = self._ask_approval(action.tool.tool_name)
+                    if not allow:
+                        return
+                
+                self.currently_executing = action.tool.tool_name
                 tool_response = selected_tool.func(**action.tool.tool_params)
             except TypeError as exc:
                 self._append_tool_error(selected_tool.tool_name, f"Invalid arguments: {exc}")
@@ -254,3 +265,27 @@ class KrishnaAgent(BaseAgent):
             return str(action.tool.tool_params["content"])
 
         return "Tool execution completed."
+
+    def _ask_approval(self, tool_name: str) -> bool:
+        from prompt_toolkit.shortcuts import choice
+        if self.user_choices.get(tool_name):
+            return True
+        
+        result = choice(
+            message=f"Agent wants to execute a tool: {tool_name}. Do you approve?",
+            options=[
+                ("y", "Approve"),
+                ("n", "Deny"),
+                ("s", "Approve and remember my choice for this session"),
+            ],
+            default="n",
+        )
+        
+        if result == "y":
+            return True
+        elif result == "s":
+            self.user_choices[tool_name] = True
+            return True
+        else: 
+            return False
+        

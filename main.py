@@ -29,7 +29,7 @@ def build_bottom_toolbar() -> FormattedText:
         ("fg:#00ffff", " Session "),
         ("default", f"total:{totals['total_tokens']} in:{totals['input_tokens']} out:{totals['output_tokens']}  "),
         ("fg:#ffd166", "Last "),
-        ("default", f"total:{last['total_tokens']} in:{last['input_tokens']} out:{last['output_tokens']}")
+        ("default", f"total:{last['total_tokens']} in:{last['input_tokens']} out:{last['output_tokens']}"),
     ]
     return FormattedText(segments)
 
@@ -109,16 +109,14 @@ def main():
             )
 
 
-            with console.status("[bold cyan]Thinking...[/]", spinner="dots") as status:
-                response_stream = llm.send_message(user_input)
-                response_seen = False
-                for msg in response_stream:
-                    if not msg or not str(msg).strip():
-                        continue
-                    if not response_seen:
-                        status.stop()  # Stop the status to clear the "Thinking..." display
-                        response_seen = True
-                    console.print(f"\n{msg}\n")
+            response_stream = llm.send_message(user_input)
+            response_seen = False
+            for msg in response_stream:
+                if not msg or not str(msg).strip():
+                    continue
+                if not response_seen:
+                    response_seen = True
+                console.print(f"\n{msg}\n")
 
             if not response_seen:
                 console.print("\n[dim]No response generated.[/dim]\n")

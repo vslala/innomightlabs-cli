@@ -4,13 +4,169 @@ import fnmatch
 import os
 import re
 from pathlib import Path
-from typing import Iterable, Literal, Sequence
+from typing import Any, Callable, Iterable, Literal, Sequence
+from rich.console import Console
+from rich.panel import Panel
+import difflib
 
 from common.decorators import Tool
 
 
 DEFAULT_MAX_OUTPUT_LINES = 120
 
+def _show_beautiful_diff(old_content: str, new_content: str, filepath: str) -> None:
+    """Display a beautiful diff using rich console formatting."""
+    console = Console()
+    
+    # Skip diff if contents are identical
+    if old_content == new_content:
+        return
+    
+    # File header with emoji and styling
+    console.print()
+    console.print(Panel(f"📝 {filepath}", style="bold cyan", expand=False))
+    
+    # Generate unified diff
+    old_lines = old_content.splitlines(keepends=True) if old_content else []
+    new_lines = new_content.splitlines(keepends=True) if new_content else []
+    
+    diff_lines = list(difflib.unified_diff(
+        old_lines,
+        new_lines,
+        fromfile=f"a/{filepath}",
+        tofile=f"b/{filepath}",
+        n=3  # 3 lines of context
+    ))
+    
+    if not diff_lines:
+        return
+    
+    # Pretty print diff with colors
+    for line in diff_lines:
+        line = line.rstrip('\n')
+        
+        if line.startswith('---'):
+            console.print(line, style="bold red")
+        elif line.startswith('+++'):
+            console.print(line, style="bold green")
+        elif line.startswith('@@'):
+            console.print(line, style="bold magenta")
+        elif line.startswith('-'):
+            console.print(line, style="red")
+        elif line.startswith('+'):
+            console.print(line, style="green")
+        else:
+            console.print(line, style="dim white")
+    
+    console.print()  # Add spacing after diff
+
+
+def _prepare_content_lines(content: str) -> list[str]:
+    """Split content into lines while preserving a trailing newline."""
+    lines = content.splitlines()
+    if content.endswith("\n"):
+        lines.append("")
+    return lines
+
+
+def _split_text_to_lines(text: str) -> list[str]:
+    """Convert full text into a list of lines preserving trailing empties."""
+    return text.split("\n") if text else []
+
+
+def _lines_to_text(lines: list[str]) -> str:
+    """Join lines into file text using newline separators."""
+    return "\n".join(lines)
+
+
+def _generate_unified_diff(old_text: str, new_text: str, filepath: str) -> str:
+    old_lines = old_text.splitlines(keepends=True) if old_text else []
+    new_lines = new_text.splitlines(keepends=True) if new_text else []
+    diff = list(
+        difflib.unified_diff(
+            old_lines,
+            new_lines,
+            fromfile=f"a/{filepath}",
+            tofile=f"b/{filepath}",
+            n=3,
+        )
+    )
+    return "".join(diff)
+
+
+def _apply_append(
+    target: Path,
+    existing_lines: list[str],
+    content_lines: list[str],
+    **_: Any,
+) -> tuple[list[str], str]:
+    new_lines = existing_lines + content_lines
+    line_count = len(content_lines)
+    summary = f"Appended {line_count} line(s) to {target}."
+    return new_lines, summary
+
+
+def _apply_insert(
+    target: Path,
+    existing_lines: list[str],
+    content_lines: list[str],
+    *,
+    line_number: int | None,
+    **_: Any,
+) -> tuple[list[str], str]:
+    if line_number is None:
+        raise ValueError("line_number is required for insert mode.")
+    insertion_index = max(0, min(line_number - 1, len(existing_lines)))
+    new_lines = existing_lines.copy()
+    new_lines[insertion_index:insertion_index] = content_lines
+    line_count = len(content_lines)
+    summary = f"Inserted {line_count} line(s) at line {line_number} in {target}."
+    return new_lines, summary
+
+
+def _apply_overwrite_unique(
+    target: Path,
+    existing_lines: list[str],
+    content_lines: list[str],
+    *,
+    old_str: str | None,
+    content: str,
+    existing_text: str,
+    **_: Any,
+) -> tuple[list[str], str]:
+    if not old_str:
+        raise ValueError("overwrite mode requires a non-empty old_str.")
+    occurrences = existing_text.count(old_str)
+    if occurrences == 0:
+        raise ValueError("Provided old_str was not found in the file.")
+    if occurrences > 1:
+        raise ValueError("Multiple matches found; only a unique matching str is required for overwrite mode.")
+    replaced_text = existing_text.replace(old_str, content)
+    new_lines = _split_text_to_lines(replaced_text)
+    summary = f"Overwrote unique match in {target}."
+    return new_lines, summary
+
+
+def _apply_overwrite_range(
+    target: Path,
+    existing_lines: list[str],
+    content_lines: list[str],
+    *,
+    line_number: int | None,
+    end_line: int | None,
+    **_: Any,
+) -> tuple[list[str], str]:
+    if line_number is None or end_line is None:
+        raise ValueError("line_number and end_line are required for overwrite_range mode.")
+    if line_number < 1 or end_line < line_number:
+        raise ValueError("Invalid range for overwrite_range. Ensure 1 <= line_number <= end_line.")
+    start_idx = min(len(existing_lines), line_number - 1)
+    end_idx = min(len(existing_lines), end_line)
+    new_lines = existing_lines.copy()
+    new_lines[start_idx:end_idx] = content_lines
+    line_count = len(content_lines)
+    summary = f"Overwrote lines {line_number}-{end_line} in {target} with {line_count} line(s)."
+    return new_lines, summary
 
 @Tool
 def fs_read(
@@ -87,20 +243,22 @@ def fs_read(
 def fs_write(
     path: str,
     content: str,
-    mode: Literal["append", "overwrite", "insert", "replace"] = "append",
+    mode: Literal["append", "overwrite", "insert", "overwrite_range", "replace"] = "append",
     line_number: int | None = None,
     end_line: int | None = None,
     create_dirs: bool = True,
+    old_str: str | None = None,
 ) -> str:
     """Write or edit a file using line-based operations.
 
     Args:
         path: Target file path.
         content: Text to write. Multiple lines are supported.
-        mode: Editing strategy - append, overwrite, insert, or replace.
-        line_number: 1-based line reference for insert/replace modes.
-        end_line: Inclusive 1-based end line for replace mode.
+        mode: Editing strategy - append, overwrite (unique string), insert, or overwrite_range/replace.
+        line_number: 1-based line reference for insert or overwrite_range modes.
+        end_line: Inclusive 1-based end line for overwrite_range mode.
         create_dirs: Create parent directories if missing.
+        old_str: String to replace in overwrite mode; must uniquely match existing content.
 
     Returns:
         Summary of the change performed or an error message.
@@ -110,44 +268,54 @@ def fs_write(
     if create_dirs:
         target.parent.mkdir(parents=True, exist_ok=True)
 
-    content_lines = content.splitlines()
-    if content.endswith("\n"):
-        content_lines.append("")
+    strategies: dict[str, Callable[..., tuple[list[str], str]]] = {
+        "append": _apply_append,
+        "insert": _apply_insert,
+        "overwrite": _apply_overwrite_unique,
+        "overwrite_range": _apply_overwrite_range,
+        "replace": _apply_overwrite_range,
+    }
 
-    if mode == "overwrite":
-        text = "\n".join(content_lines)
-        target.write_text(text, encoding="utf-8")
-        return f"Overwrote {target} with {len(content_lines)} line(s)."
-
-    existing_lines = []
-    if target.exists():
-        existing_text = target.read_text(encoding="utf-8")
-        existing_lines = existing_text.split("\n")
-
-    if mode == "append":
-        existing_lines.extend(content_lines)
-        action_description = "Appended"
-    elif mode == "insert":
-        if line_number is None:
-            return "line_number is required for insert mode."
-        index = max(0, min(line_number - 1, len(existing_lines)))
-        existing_lines[index:index] = content_lines
-        action_description = f"Inserted at line {line_number}"
-    elif mode == "replace":
-        if line_number is None or end_line is None:
-            return "line_number and end_line are required for replace mode."
-        if line_number < 1 or end_line < line_number:
-            return "Invalid range for replace. Ensure 1 <= line_number <= end_line."
-        start_idx = min(len(existing_lines), line_number - 1)
-        end_idx = min(len(existing_lines), end_line)
-        existing_lines[start_idx:end_idx] = content_lines
-        action_description = f"Replaced lines {line_number}-{end_line}"
-    else:
+    strategy = strategies.get(mode)
+    if strategy is None:
         return f"Unsupported mode '{mode}'."
 
-    text = "\n".join(existing_lines)
-    target.write_text(text, encoding="utf-8")
-    return f"{action_description} {len(content_lines)} line(s) in {target}."
+    existing_text = ""
+    if target.exists():
+        existing_text = target.read_text(encoding="utf-8")
+
+    existing_lines = _split_text_to_lines(existing_text)
+    content_lines = _prepare_content_lines(content)
+
+    try:
+        new_lines, summary = strategy(
+            target,
+            existing_lines,
+            content_lines,
+            line_number=line_number,
+            end_line=end_line,
+            old_str=old_str,
+            content=content,
+            existing_text=existing_text,
+        )
+    except ValueError as exc:
+        return str(exc)
+
+    if mode == "replace":
+        summary = summary.replace("Overwrote", "Replaced", 1)
+
+    new_text = _lines_to_text(new_lines)
+
+    if new_text == existing_text:
+        return "No changes applied; resulting content matches existing file.\nDiff:\n(no diff)"
+
+    target.write_text(new_text, encoding="utf-8")
+
+    diff_text = _generate_unified_diff(existing_text, new_text, str(target))
+    if diff_text:
+        _show_beautiful_diff(existing_text, new_text, str(target))
+        return f"{summary}\n"
+    return f"{summary}\nDiff:\n(no diff)"
 
 
 @Tool
