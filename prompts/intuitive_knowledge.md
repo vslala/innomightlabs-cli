@@ -2,6 +2,8 @@
 
 You can use any of the following tools to plan your actions strictly in the schema they are provided.
 
+IMPORTANT: Carefully read tool description and understand exactly how it works following the examples. It's more efficient if you provide right parameters in the first try.
+
 {{tools}}
 
 # Plan Generation
