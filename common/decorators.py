@@ -1,6 +1,15 @@
 import inspect
 from datetime import datetime, timezone
-from typing import Annotated, Any, List, Literal, Union, get_args, get_origin, get_type_hints
+from typing import (
+    Annotated,
+    Any,
+    List,
+    Literal,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from pydantic import BaseModel, Field
 from pydantic.fields import FieldInfo
@@ -8,6 +17,7 @@ from pydantic.fields import FieldInfo
 from common.models import BaseTool
 
 NoneType = type(None)
+
 
 def Tool(func: Any) -> BaseTool:
     """Decorator to define a tool."""
@@ -44,7 +54,9 @@ def Tool(func: Any) -> BaseTool:
                 schema = {"type": "number"}
             elif base_annotation in {bool}:
                 schema = {"type": "boolean"}
-            elif isinstance(base_annotation, type) and issubclass(base_annotation, BaseModel):
+            elif isinstance(base_annotation, type) and issubclass(
+                base_annotation, BaseModel
+            ):
                 schema = base_annotation.model_json_schema()
             elif base_annotation is Any:
                 schema = {}
@@ -63,7 +75,9 @@ def Tool(func: Any) -> BaseTool:
                     value_schema = {}
                 schema = {"type": "object", "additionalProperties": value_schema}
             elif origin is tuple:
-                arg_schemas = [annotation_to_schema(arg) for arg in get_args(base_annotation)]
+                arg_schemas = [
+                    annotation_to_schema(arg) for arg in get_args(base_annotation)
+                ]
                 schema = {"type": "array", "prefixItems": arg_schemas}
             elif origin is set:
                 item_args = get_args(base_annotation)
@@ -74,7 +88,9 @@ def Tool(func: Any) -> BaseTool:
                 schema = {"enum": literal_args}
                 if literal_args and all(isinstance(arg, str) for arg in literal_args):
                     schema["type"] = "string"
-                elif literal_args and all(isinstance(arg, bool) for arg in literal_args):
+                elif literal_args and all(
+                    isinstance(arg, bool) for arg in literal_args
+                ):
                     schema["type"] = "boolean"
                 elif literal_args and all(isinstance(arg, int) for arg in literal_args):
                     schema["type"] = "integer"
@@ -85,7 +101,9 @@ def Tool(func: Any) -> BaseTool:
                     if len(union_args) == 1:
                         schema = annotation_to_schema(union_args[0])
                     else:
-                        schema = {"anyOf": [annotation_to_schema(arg) for arg in union_args]}
+                        schema = {
+                            "anyOf": [annotation_to_schema(arg) for arg in union_args]
+                        }
                 else:
                     schema = {}
 
@@ -118,7 +136,11 @@ def Tool(func: Any) -> BaseTool:
 
         properties[name] = param_schema
 
-    params_schema: dict[str, Any] = {"type": "object", "properties": properties, "additionalProperties": False}
+    params_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+    }
     if required:
         params_schema["required"] = required
 
@@ -126,5 +148,5 @@ def Tool(func: Any) -> BaseTool:
         tool_name=func.__name__,
         description=func.__doc__ or "No description provided.",
         tool_params=params_schema,
-        func=func
+        func=func,
     )

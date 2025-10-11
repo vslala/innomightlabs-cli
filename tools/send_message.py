@@ -3,8 +3,9 @@ from common.decorators import Tool
 
 console = Console()
 
+
 @Tool
-def send_message(content: str) -> None:
+def send_message(content: str) -> str:
     """
     Sends a message to the user.
 
@@ -15,11 +16,13 @@ def send_message(content: str) -> None:
         None
     """
     console.print(f"{content}")
-    
+    return content
+
+
 @Tool
-def print_message(content: str) -> None:
+def print_message(content: str) -> str:
     """
-    Prints a message to the console. 
+    Prints a message to the console.
     Use these styles with `[style]text[/style]`
 
     ---
@@ -104,3 +107,4 @@ def print_message(content: str) -> None:
         None
     """
     console.print(f"{content}")
+    return content

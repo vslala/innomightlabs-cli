@@ -14,50 +14,53 @@ from common.decorators import Tool
 
 DEFAULT_MAX_OUTPUT_LINES = 120
 
+
 def _show_beautiful_diff(old_content: str, new_content: str, filepath: str) -> None:
     """Display a beautiful diff using rich console formatting."""
     console = Console()
-    
+
     # Skip diff if contents are identical
     if old_content == new_content:
         return
-    
+
     # File header with emoji and styling
     console.print()
     console.print(Panel(f"📝 {filepath}", style="bold cyan", expand=False))
-    
+
     # Generate unified diff
     old_lines = old_content.splitlines(keepends=True) if old_content else []
     new_lines = new_content.splitlines(keepends=True) if new_content else []
-    
-    diff_lines = list(difflib.unified_diff(
-        old_lines,
-        new_lines,
-        fromfile=f"a/{filepath}",
-        tofile=f"b/{filepath}",
-        n=3  # 3 lines of context
-    ))
-    
+
+    diff_lines = list(
+        difflib.unified_diff(
+            old_lines,
+            new_lines,
+            fromfile=f"a/{filepath}",
+            tofile=f"b/{filepath}",
+            n=3,  # 3 lines of context
+        )
+    )
+
     if not diff_lines:
         return
-    
+
     # Pretty print diff with colors
     for line in diff_lines:
-        line = line.rstrip('\n')
-        
-        if line.startswith('---'):
+        line = line.rstrip("\n")
+
+        if line.startswith("---"):
             console.print(line, style="bold red")
-        elif line.startswith('+++'):
+        elif line.startswith("+++"):
             console.print(line, style="bold green")
-        elif line.startswith('@@'):
+        elif line.startswith("@@"):
             console.print(line, style="bold magenta")
-        elif line.startswith('-'):
+        elif line.startswith("-"):
             console.print(line, style="red")
-        elif line.startswith('+'):
+        elif line.startswith("+"):
             console.print(line, style="green")
         else:
             console.print(line, style="dim white")
-    
+
     console.print()  # Add spacing after diff
 
 
@@ -140,7 +143,9 @@ def _apply_overwrite_unique(
     if occurrences == 0:
         raise ValueError("Provided old_str was not found in the file.")
     if occurrences > 1:
-        raise ValueError("Multiple matches found; only a unique matching str is required for overwrite mode.")
+        raise ValueError(
+            "Multiple matches found; only a unique matching str is required for overwrite mode."
+        )
     replaced_text = existing_text.replace(old_str, content)
     new_lines = _split_text_to_lines(replaced_text)
     summary = f"Overwrote unique match in {target}."
@@ -157,9 +162,13 @@ def _apply_overwrite_range(
     **_: Any,
 ) -> tuple[list[str], str]:
     if line_number is None or end_line is None:
-        raise ValueError("line_number and end_line are required for overwrite_range mode.")
+        raise ValueError(
+            "line_number and end_line are required for overwrite_range mode."
+        )
     if line_number < 1 or end_line < line_number:
-        raise ValueError("Invalid range for overwrite_range. Ensure 1 <= line_number <= end_line.")
+        raise ValueError(
+            "Invalid range for overwrite_range. Ensure 1 <= line_number <= end_line."
+        )
     start_idx = min(len(existing_lines), line_number - 1)
     end_idx = min(len(existing_lines), end_line)
     new_lines = existing_lines.copy()
@@ -167,6 +176,7 @@ def _apply_overwrite_range(
     line_count = len(content_lines)
     summary = f"Overwrote lines {line_number}-{end_line} in {target} with {line_count} line(s)."
     return new_lines, summary
+
 
 @Tool
 def fs_read(
@@ -243,7 +253,9 @@ def fs_read(
 def fs_write(
     path: str,
     content: str,
-    mode: Literal["append", "overwrite", "insert", "overwrite_range", "replace"] = "append",
+    mode: Literal[
+        "create", "append", "overwrite", "insert", "overwrite_range", "replace"
+    ] = "append",
     line_number: int | None = None,
     end_line: int | None = None,
     create_dirs: bool = True,
@@ -254,11 +266,33 @@ def fs_write(
     Args:
         path: Target file path.
         content: Text to write. Multiple lines are supported.
-        mode: Editing strategy - append, overwrite (unique string), insert, or overwrite_range/replace.
+        mode: Editing strategy - create, append, overwrite (unique string), insert, or overwrite_range/replace.
         line_number: 1-based line reference for insert or overwrite_range modes.
         end_line: Inclusive 1-based end line for overwrite_range mode.
         create_dirs: Create parent directories if missing.
         old_str: String to replace in overwrite mode; must uniquely match existing content.
+
+    Examples:
+        Create file with content:
+            {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "New item\n", "mode": "create"}}}
+
+        Append new lines:
+            {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "New item\n", "mode": "append"}}}
+
+        Insert lines at a specific position:
+            {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "Intro\n", "mode": "insert", "line_number": 1}}}
+
+        Overwrite a unique string in the file:
+        - IMPORTANT: Overwrite mode requires a non-empty old_str.
+        - Must pass the old_str exactly as it appears in the file.
+        - Must pass the content to replace it with.
+            {"tool": {"tool_name": "fs_write", "tool_params": {"path": "config.ini", "content": "timeout=60", "mode": "overwrite", "old_str": "timeout=30"}}}
+
+        Replace a line range (alias: overwrite_range or replace):
+            {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "Line A\nLine B\n", "mode": "overwrite_range", "line_number": 5, "end_line": 6}}}
+
+        Replace a range using the legacy alias:
+            {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "Final\n", "mode": "replace", "line_number": 10, "end_line": 12}}}
 
     Returns:
         Summary of the change performed or an error message.
@@ -269,6 +303,7 @@ def fs_write(
         target.parent.mkdir(parents=True, exist_ok=True)
 
     strategies: dict[str, Callable[..., tuple[list[str], str]]] = {
+        "create": _apply_append,
         "append": _apply_append,
         "insert": _apply_insert,
         "overwrite": _apply_overwrite_unique,
@@ -314,7 +349,7 @@ def fs_write(
     diff_text = _generate_unified_diff(existing_text, new_text, str(target))
     if diff_text:
         _show_beautiful_diff(existing_text, new_text, str(target))
-        return f"{summary}\n"
+        return f"{summary}\n{diff_text}"
     return f"{summary}\nDiff:\n(no diff)"
 
 
@@ -354,7 +389,9 @@ def fs_find(
     max_results = max(1, max_results)
 
     if extensions:
-        normalized_exts = {ext if ext.startswith('.') else f'.{ext}' for ext in extensions}
+        normalized_exts = {
+            ext if ext.startswith(".") else f".{ext}" for ext in extensions
+        }
     else:
         normalized_exts = None
 
@@ -375,13 +412,15 @@ def fs_find(
 
     for current_root, dirnames, filenames in os.walk(root, followlinks=False):
         rel_root = Path(current_root).relative_to(root)
-        depth = 0 if rel_root == Path('.') else len(rel_root.parts)
+        depth = 0 if rel_root == Path(".") else len(rel_root.parts)
         if max_depth is not None and depth >= max_depth:
             dirnames[:] = []
 
         candidates: Iterable[Path]
         file_candidates = [Path(current_root, name) for name in filenames]
-        dir_candidates = [Path(current_root, name) for name in dirnames] if include_dirs else []
+        dir_candidates = (
+            [Path(current_root, name) for name in dirnames] if include_dirs else []
+        )
         candidates = file_candidates + dir_candidates
 
         for candidate in candidates:
@@ -462,7 +501,9 @@ def fs_search(
     max_matches = max(1, min(max_matches, DEFAULT_MAX_OUTPUT_LINES))
 
     if extensions:
-        normalized_exts = {ext if ext.startswith('.') else f'.{ext}' for ext in extensions}
+        normalized_exts = {
+            ext if ext.startswith(".") else f".{ext}" for ext in extensions
+        }
     else:
         normalized_exts = None
 

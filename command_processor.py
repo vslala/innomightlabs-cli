@@ -3,18 +3,19 @@ Command processor module for Innomight Labs CLI.
 Handles parsing and executing user commands.
 """
 
+
 class CommandProcessor:
     """
     Processes and executes commands entered by the user in the CLI.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.commands = {
-            '/help': self.show_help,
-            '/version': self.show_version,
+            "/help": self.show_help,
+            "/version": self.show_version,
         }
 
-    def process_command(self, command_text):
+    def process_command(self, command_text: str) -> str:
         """
         Process a command string and execute the appropriate action.
 
@@ -34,9 +35,11 @@ class CommandProcessor:
         if command_name in self.commands:
             return self.commands[command_name](args)
 
-        return f"Command not found: {command_name}. Type '/help' for available commands."
+        return (
+            f"Command not found: {command_name}. Type '/help' for available commands."
+        )
 
-    def show_help(self, args=""):
+    def show_help(self, args: str = "") -> str:
         """Display help information about available commands"""
         help_text = """
 Available Commands:
@@ -52,6 +55,6 @@ To execute a command, press Enter on a new line.
         """
         return help_text.strip()
 
-    def show_version(self, args=""):
+    def show_version(self, args: str = "") -> str:
         """Display the current version of the CLI"""
         return "Innomight Labs CLI v0.1.0"

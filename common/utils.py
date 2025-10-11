@@ -1,3 +1,52 @@
+import os
+import json
+import subprocess
+import shutil
+from typing import Generator, Optional
+from pathlib import Path
+from rich.console import Console
+from rich.prompt import Prompt
+from loguru import logger
+
+ROOT = Path(os.environ["PROJECT_ROOT"]).resolve()
+console = Console()
+
+log_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS zz}</green> | <level>{level: <8}</level> | <yellow>Line {line: >4} ({file}):</yellow> <b>{message}</b>"
+logger.add(".krishna/debug.log", level="DEBUG", format=log_format, colorize=False, backtrace=True, diagnose=True)
+logger.add(".krishna/info.log", level="INFO", format=log_format, colorize=False, backtrace=True, diagnose=True)
+
+
+
+
+
+
+def tree(path: str = ".", depth: Optional[int] = None, prefix: str = "") -> Generator[str, None, None]:
+    if depth is not None and depth < 0:
+        return
+    entries = sorted(os.listdir(path))
+    for i, entry in enumerate(entries):
+        full_path = os.path.join(path, entry)
+        connector = "└── " if i == len(entries) - 1 else "├── "
+        yield (prefix + connector + entry)
+        if os.path.isdir(full_path):
+            extension = "    " if i == len(entries) - 1 else "│   "
+            if depth is None or depth > 0:
+                tree(
+                    full_path, None if depth is None else depth - 1, prefix + extension
+                )
+
+
+
+
+def last_commits(n: int = 5) -> str:
+    if shutil.which("git") is None:
+        return "Git is not installed or not found in PATH."
+
+    cmd = ["git", "log", f"-n{n}", "--pretty=format:%h | %an | %ar | %s"]
+    out = subprocess.check_output(cmd, text=True)
+    return out.strip()
+
+
 def extract_json_from_text(text: str) -> str:
     """Extract the JSON snippet enclosed within a fenced ```json code block.
 
@@ -18,21 +67,59 @@ def extract_json_from_text(text: str) -> str:
         text (str): The input text containing a JSON object.
 
     Returns:
-        str: The JSON string found inside the fenced block, or the original
-            text if the block is not present.
+        str: The JSON string found inside the fenced block, or an empty
+            string when the block is not present.
     """
 
-    start_marker = "```json"
-    end_marker = "```"
+    decoder = json.JSONDecoder()
+    search_start = 0
 
-    start_index = text.find(start_marker)
-    if start_index == -1:
-        return text.strip()
+    while True:
+        brace_index = text.find("{", search_start)
+        if brace_index == -1:
+            return ""
 
-    start_index += len(start_marker)
+        fragment = text[brace_index:]
+        stripped_fragment = fragment.lstrip()
+        offset = len(fragment) - len(stripped_fragment)
+        absolute_start = brace_index + offset
 
-    end_index = text.find(end_marker, start_index)
-    if end_index == -1:
-        return text[start_index:].strip()
+        try:
+            _, end_index = decoder.raw_decode(text[absolute_start:])
+        except json.JSONDecodeError:
+            search_start = brace_index + 1
+            continue
 
-    return text[start_index:end_index].strip()
+        absolute_end = absolute_start + end_index
+        return text[absolute_start:absolute_end].strip()
+    
+def extract_user_facing_text(
+    raw_reply: str, action_json: str | None
+) -> str:
+    if not raw_reply:
+        return ""
+
+    remainder = raw_reply
+    if action_json:
+        idx = remainder.find(action_json)
+        if idx != -1:
+            remainder = remainder[:idx] + remainder[idx + len(action_json) :]
+        else:
+            remainder = remainder.replace(action_json, "", 1)
+
+    cleaned = remainder.replace("```json", "").replace("```", "").strip()
+    return cleaned
+
+
+
+def read_file(path: str) -> str:
+    if os.path.exists(path=f"{ROOT}/{path}"):
+        with open(path, "r") as f:
+            return f.read()
+    
+    console.log(f"Path Not Found: {ROOT}/{path}")  
+    return ""
+
+def write_file(path: str, content: str) -> None:
+    with open(f"{ROOT}/.krishna/{path}", "w") as f:
+        f.write(content) 
