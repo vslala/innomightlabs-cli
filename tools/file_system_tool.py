@@ -109,6 +109,19 @@ def _apply_append(
     return new_lines, summary
 
 
+def _apply_create(
+    target: Path,
+    existing_lines: list[str],
+    content_lines: list[str],
+    **_: Any,
+) -> tuple[list[str], str]:
+    new_lines = content_lines.copy()
+    line_count = len(content_lines)
+    action = "Replaced" if target.exists() else "Created"
+    summary = f"{action} {target} with {line_count} line(s)."
+    return new_lines, summary
+
+
 def _apply_insert(
     target: Path,
     existing_lines: list[str],
@@ -266,33 +279,30 @@ def fs_write(
     Args:
         path: Target file path.
         content: Text to write. Multiple lines are supported.
-        mode: Editing strategy - create, append, overwrite (unique string), insert, or overwrite_range/replace.
-        line_number: 1-based line reference for insert or overwrite_range modes.
-        end_line: Inclusive 1-based end line for overwrite_range mode.
+        mode: Editing strategy. Accepted values and required parameters:
+            - "create": create a new file or replace the file content entirely with `content`.
+            - "append": add content to the end of the file, no extra parameters.
+            - "insert": insert at a specific location. Requires `line_number` (1-based).
+            - "overwrite": replace one unique string. Requires `old_str` exactly as it appears in the file.
+              `content` becomes the replacement text.
+            - "overwrite_range" / "replace": replace a span of lines. Requires both `line_number` (start) and
+              `end_line` (inclusive).
+        line_number: 1-based line reference for insert and overwrite_range/replace modes.
+        end_line: Inclusive 1-based end line for overwrite_range/replace modes.
         create_dirs: Create parent directories if missing.
         old_str: String to replace in overwrite mode; must uniquely match existing content.
 
+    Usage notes:
+        - "overwrite" will raise an error when `old_str` is missing, empty, or matches multiple locations.
+        - When updating an existing snippet, read the file first (via `fs_read`) and copy the exact text into `old_str`.
+        - Use "replace" only as the alias for "overwrite_range"; both still require `line_number` and `end_line`.
+
     Examples:
-        Create file with content:
-            {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "New item\n", "mode": "create"}}}
-
-        Append new lines:
-            {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "New item\n", "mode": "append"}}}
-
-        Insert lines at a specific position:
-            {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "Intro\n", "mode": "insert", "line_number": 1}}}
-
-        Overwrite a unique string in the file:
-        - IMPORTANT: Overwrite mode requires a non-empty old_str.
-        - Must pass the old_str exactly as it appears in the file.
-        - Must pass the content to replace it with.
-            {"tool": {"tool_name": "fs_write", "tool_params": {"path": "config.ini", "content": "timeout=60", "mode": "overwrite", "old_str": "timeout=30"}}}
-
-        Replace a line range (alias: overwrite_range or replace):
-            {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "Line A\nLine B\n", "mode": "overwrite_range", "line_number": 5, "end_line": 6}}}
-
-        Replace a range using the legacy alias:
-            {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "Final\n", "mode": "replace", "line_number": 10, "end_line": 12}}}
+        {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "First line\n", "mode": "create"}}}
+        {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "Another\n", "mode": "append"}}}
+        {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "Header\n", "mode": "insert", "line_number": 1}}}
+        {"tool": {"tool_name": "fs_write", "tool_params": {"path": "config.ini", "content": "timeout=60", "mode": "overwrite", "old_str": "timeout=30"}}}
+        {"tool": {"tool_name": "fs_write", "tool_params": {"path": "notes.txt", "content": "A\nB\n", "mode": "overwrite_range", "line_number": 5, "end_line": 6}}}
 
     Returns:
         Summary of the change performed or an error message.
@@ -303,7 +313,7 @@ def fs_write(
         target.parent.mkdir(parents=True, exist_ok=True)
 
     strategies: dict[str, Callable[..., tuple[list[str], str]]] = {
-        "create": _apply_append,
+        "create": _apply_create,
         "append": _apply_append,
         "insert": _apply_insert,
         "overwrite": _apply_overwrite_unique,
