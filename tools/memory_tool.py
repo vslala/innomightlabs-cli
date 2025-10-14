@@ -12,10 +12,10 @@ from common.containers import container
 from dependency_injector.wiring import Provide
 
 
-
 @dataclass
 class MemoryEntry:
     """Structured memory entry with metadata and embedding"""
+
     id: int  # Line number in the file
     content: str
     timestamp: str
@@ -24,30 +24,34 @@ class MemoryEntry:
     metadata: Optional[Dict[str, Any]] = None
 
     @classmethod
-    def create(cls, content: str, tags: Optional[List[str]] = None, 
-               metadata: Optional[Dict[str, Any]] = None, 
-               embedding_service: Optional[BaseTextEmbedder] = None) -> 'MemoryEntry':
+    def create(
+        cls,
+        content: str,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        embedding_service: Optional[BaseTextEmbedder] = None,
+    ) -> "MemoryEntry":
         """Create a new memory entry with auto-generated fields"""
         entry = cls(
             id=0,  # Will be set when adding to file
             content=content,
             timestamp=datetime.now().isoformat(),
             tags=tags or [],
-            metadata=metadata or {}
+            metadata=metadata or {},
         )
-        
+
         # Generate embedding if service provided
         if embedding_service:
             entry.embedding = embedding_service.embed_text(content)
-            
+
         return entry
 
     def to_ndjson_line(self) -> str:
         """Convert to NDJSON line format"""
         return json.dumps(asdict(self), ensure_ascii=False)
-    
+
     @classmethod
-    def from_ndjson_line(cls, line: str) -> 'MemoryEntry':
+    def from_ndjson_line(cls, line: str) -> "MemoryEntry":
         """Create from NDJSON line"""
         data = json.loads(line.strip())
         return cls(**data)
@@ -55,35 +59,35 @@ class MemoryEntry:
 
 class MemoryTool:
     """Tool for managing persistent memory with embeddings"""
-    
+
     def __init__(self, embedding_service: Optional[BaseTextEmbedder] = None):
         self.embedding_service = embedding_service
         self.memory_dir = Path(".krishna")
         self.memory_file = self.memory_dir / "memories.ndjson"
         self._ensure_memory_structure()
-    
+
     def _ensure_memory_structure(self) -> None:
         """Ensure .krishna directory and memory file exist"""
         self.memory_dir.mkdir(exist_ok=True)
         if not self.memory_file.exists():
             self.memory_file.touch()
-    
+
     def _get_next_id(self) -> int:
         """Get the next available ID (line number)"""
         if not self.memory_file.exists() or self.memory_file.stat().st_size == 0:
             return 1
-        
-        with open(self.memory_file, 'r', encoding='utf-8') as f:
+
+        with open(self.memory_file, "r", encoding="utf-8") as f:
             lines = f.readlines()
             return len(lines) + 1
-    
+
     def _load_all_memories(self) -> List[MemoryEntry]:
         """Load all memory entries from file"""
         memories: List[MemoryEntry] = []
         if not self.memory_file.exists():
             return memories
-            
-        with open(self.memory_file, 'r', encoding='utf-8') as f:
+
+        with open(self.memory_file, "r", encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
                 if line.strip():
                     try:
@@ -93,9 +97,15 @@ class MemoryTool:
                     except json.JSONDecodeError:
                         continue  # Skip malformed lines
         return memories
-    def append_memory(self, content: str, tags: Optional[List[str]] = None, 
-                     metadata: Optional[Dict[str, Any]] = None, position: str = "end", 
-                     line_number: Optional[int] = None) -> Dict[str, Any]:
+
+    def append_memory(
+        self,
+        content: str,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        position: str = "end",
+        line_number: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Append memory to file with various positioning options"""
         try:
             # Create memory entry
@@ -304,9 +314,7 @@ class MemoryTool:
 
             # Regenerate embedding for new content
             if self.embedding_service:
-                target_memory.embedding = self.embedding_service.embed_text(
-                    new_content
-                )
+                target_memory.embedding = self.embedding_service.embed_text(new_content)
 
             # Rewrite file with updated memory
             with open(self.memory_file, "w", encoding="utf-8") as f:
@@ -539,7 +547,9 @@ def memory_modify(
 
 
 @Tool
-def memory_delete(memory_id: Optional[int] = None, content_text: Optional[str] = None) -> str:
+def memory_delete(
+    memory_id: Optional[int] = None, content_text: Optional[str] = None
+) -> str:
     """Delete memory by ID or content text
 
     Args:

@@ -27,27 +27,22 @@ class BaseTool(BaseModel):
     func: Any = Field(default=None, exclude=True)
 
 
-
-
-
 class ContextBlock(BaseModel):
     title: str
     content: str
-    
+
+
 class AgentContext(BaseModel):
     agent_current_response: str | None = Field(default=None)
     assistant_plain_response: str | None = Field(default=None)
     should_end: bool = Field(default=False)
     context: dict[str, ContextBlock]
-    
+
     def serialize(self) -> str:
         output = ""
-        
+
         for key, block in self.context.items():
             output += block.model_dump_json(indent=4)
             output += "\n"
 
         return output
-    
-
-    

@@ -12,15 +12,27 @@ ROOT = Path(os.environ["PROJECT_ROOT"]).resolve()
 console = Console()
 
 log_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS zz}</green> | <level>{level: <8}</level> | <yellow>Line {line: >4} ({file}):</yellow> <b>{message}</b>"
-logger.add(".krishna/debug.log", level="DEBUG", format=log_format, colorize=False, backtrace=True, diagnose=True)
-logger.add(".krishna/info.log", level="INFO", format=log_format, colorize=False, backtrace=True, diagnose=True)
+logger.add(
+    ".krishna/debug.log",
+    level="DEBUG",
+    format=log_format,
+    colorize=False,
+    backtrace=True,
+    diagnose=True,
+)
+logger.add(
+    ".krishna/info.log",
+    level="INFO",
+    format=log_format,
+    colorize=False,
+    backtrace=True,
+    diagnose=True,
+)
 
 
-
-
-
-
-def tree(path: str = ".", depth: Optional[int] = None, prefix: str = "") -> Generator[str, None, None]:
+def tree(
+    path: str = ".", depth: Optional[int] = None, prefix: str = ""
+) -> Generator[str, None, None]:
     if depth is not None and depth < 0:
         return
     entries = sorted(os.listdir(path))
@@ -34,8 +46,6 @@ def tree(path: str = ".", depth: Optional[int] = None, prefix: str = "") -> Gene
                 tree(
                     full_path, None if depth is None else depth - 1, prefix + extension
                 )
-
-
 
 
 def last_commits(n: int = 5) -> str:
@@ -92,10 +102,9 @@ def extract_json_from_text(text: str) -> str:
 
         absolute_end = absolute_start + end_index
         return text[absolute_start:absolute_end].strip()
-    
-def extract_user_facing_text(
-    raw_reply: str, action_json: str | None
-) -> str:
+
+
+def extract_user_facing_text(raw_reply: str, action_json: str | None) -> str:
     if not raw_reply:
         return ""
 
@@ -111,15 +120,15 @@ def extract_user_facing_text(
     return cleaned
 
 
-
 def read_file(path: str) -> str:
     if os.path.exists(path=f"{ROOT}/{path}"):
         with open(path, "r") as f:
             return f.read()
-    
-    console.log(f"Path Not Found: {ROOT}/{path}")  
+
+    console.log(f"Path Not Found: {ROOT}/{path}")
     return ""
+
 
 def write_file(path: str, content: str) -> None:
     with open(f"{ROOT}/.krishna/{path}", "w") as f:
-        f.write(content) 
+        f.write(content)
