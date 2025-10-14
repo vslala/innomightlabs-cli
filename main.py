@@ -14,7 +14,7 @@ from rich.markdown import Markdown
 from agents.plan_act_observe_agent.plan_act_observe_agent import PlanActObserveAgent
 from command_processor import CommandProcessor
 from conversation_manager.sliding_window_conversation_manager import (
-    SlidingWindowConversationManager
+    SlidingWindowConversationManager,
 )
 from text_embedding.ollama_text_embedder import OllamaTextEmbedder
 from tools.file_system_tool import fs_tools
@@ -24,6 +24,7 @@ from common.containers import container
 import os
 
 from tools.sub_agent_tools import plan_act_observe_subagent
+from tools.todo_tool import todo_manager
 
 os.makedirs(".krishna", exist_ok=True)
 
@@ -36,10 +37,11 @@ intuitive_knowledge = read_file("prompts/intuitive_knowledge.md")
 planner_agent = PlanActObserveAgent(
     system_prompt=system_instructions,
     intuitive_knowledge=intuitive_knowledge,
-    conversation_manager=container.persistent_conversation_manager(),
+    conversation_manager=container.persistent_sliding_window_conversation_manager(),
     text_embedder=container.text_embedder(),
-    tools=[plan_act_observe_subagent],
+    tools=[plan_act_observe_subagent, todo_manager],
 )
+
 
 def build_bottom_toolbar() -> FormattedText:
     """Render session metrics for the bottom toolbar."""
@@ -142,6 +144,9 @@ def main() -> None:
                 mouse_support=True,
                 bottom_toolbar=build_bottom_toolbar,
             )
+
+            if user_input.strip().startswith("/"):
+                continue
 
             final_response = planner_agent.send_message(user_input)
             if not final_response:

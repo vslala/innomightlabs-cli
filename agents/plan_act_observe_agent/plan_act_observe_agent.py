@@ -9,13 +9,22 @@ from rich.prompt import Prompt
 from rich.markdown import Markdown
 
 from agents.base_agent import BaseAgent
-from agents.plan_act_observe_agent.plan_act_observe_agent_model import Action, ActionPlan
+from agents.plan_act_observe_agent.plan_act_observe_agent_model import (
+    Action,
+    ActionPlan,
+)
 from common.models import BaseTool, Message
-from common.utils import extract_json_from_text, extract_user_facing_text, tree, last_commits, write_file
+from common.utils import (
+    extract_json_from_text,
+    extract_user_facing_text,
+    tree,
+    last_commits,
+    write_file,
+)
 from conversation_manager.base_conversation_manager import BaseConversationManager
 from text_embedding.base_text_embedder import BaseTextEmbedder
+from tools.todo_tool import todo_manager
 # from agents.krishna_agent.actions import hook_actions
-
 
 
 MAX_AGENT_LOOPS = 28
@@ -58,8 +67,6 @@ class PlanActObserveAgent(BaseAgent):
         self.currently_executing: str | None = "None"
         self.user_choices: dict[str, Any] = {}
 
-        
-
     async def stream(self, prompt: Any) -> AsyncGenerator[str, None]:
         yield "Streaming response part 1..."
         yield "Streaming response part 2..."
@@ -87,15 +94,19 @@ class PlanActObserveAgent(BaseAgent):
             self.usage_totals["output_tokens"] += output_tokens
             self.usage_totals["total_tokens"] += total_tokens
 
-
-    
     def send_message(self, user_message: str) -> str:
         """Main loop driving agent/tool interaction for a user request."""
         agent_iterations = 0
         system_instructions = self.system_prompt
         intuitive_knowledge = self.intuitive_knowledge
-        self.conversation_manager.add_message(Message(role=f"user", content=user_message, embedding=self.text_embedder.embed_text(user_message)))
-        
+        self.conversation_manager.add_message(
+            Message(
+                role=f"user",
+                content=user_message,
+                embedding=self.text_embedder.embed_text(user_message),
+            )
+        )
+
         tools_blob = "\n".join(tool.model_dump_json() for tool in self.tools)
         plan_example = ActionPlan(
             plan=[
@@ -117,20 +128,21 @@ class PlanActObserveAgent(BaseAgent):
         ).model_dump_json()
         directory_structure = "\n".join(tree())
         commits = last_commits(7)
-
+        todos = todo_manager.func(mode="list")
         replacements = {
             "{{tools}}": tools_blob,
             "{{plan_generation_example}}": plan_example,
             "{{current_directory_structure}}": directory_structure,
             "{{recent_commits}}": commits,
             "{{current_user_message}}": user_message,
-            "{{iteration_count}}": str(agent_iterations)
+            "{{iteration_count}}": str(agent_iterations),
+            "{{todos}}": todos or "",
         }
 
         intuitive_template = intuitive_knowledge
         for placeholder, value in replacements.items():
             intuitive_template = intuitive_template.replace(placeholder, value)
-        
+
         last_observation = "None"
         final_output = ""
         while True:
@@ -149,39 +161,78 @@ class PlanActObserveAgent(BaseAgent):
                 with console.status(":brain: Thinking...", spinner="dots") as status:
                     agent_response = self.llm.invoke(prompt)
                     self._update_usage_metrics(agent_message=agent_response)
-                
+
                 if isinstance(agent_response.content, str):
                     plan_or_text = agent_response.content
                     plan = extract_json_from_text(plan_or_text)
                     response = extract_user_facing_text(plan_or_text, plan)
-                    self.conversation_manager.add_message(Message(role="assistant", content=response, embedding=self.text_embedder.embed_text(response)))
+                    self.conversation_manager.add_message(
+                        Message(
+                            role="assistant",
+                            content=response,
+                            embedding=self.text_embedder.embed_text(response),
+                        )
+                    )
                     console.print(Markdown(response))
-                    
+
                     if plan:
                         action_plan = ActionPlan.model_validate_json(plan)
                         for action in action_plan.plan:
-                            selected_tool = list(filter(lambda t: t.tool_name == action.tool.tool_name, self.tools))
+                            selected_tool = list(
+                                filter(
+                                    lambda t: t.tool_name == action.tool.tool_name,
+                                    self.tools,
+                                )
+                            )
                             if selected_tool:
                                 console.print(f"\n[bold]{action.thought}[/bold]")
                                 user_response = self._ask_approval(action=action)
                                 if isinstance(user_response, str):
-                                    self.conversation_manager.add_message(Message(role=f"user", content=user_response, embedding=self.text_embedder.embed_text(user_response)))
+                                    self.conversation_manager.add_message(
+                                        Message(
+                                            role=f"user",
+                                            content=user_response,
+                                            embedding=self.text_embedder.embed_text(
+                                                user_response
+                                            ),
+                                        )
+                                    )
                                 elif user_response:
-                                    tool_response = selected_tool[0].func(**action.tool.tool_params)
+                                    tool_response = selected_tool[0].func(
+                                        **action.tool.tool_params
+                                    )
                                     tool_use_id = uuid4()
                                     last_observation += f"\nTool Use ID: {tool_use_id}\n{tool_response}\n\n"
-                                    self.conversation_manager.add_message(Message(role=f"tool_use[ID={tool_use_id}]", content=tool_response, embedding=self.text_embedder.embed_text(tool_response)))
+                                    self.conversation_manager.add_message(
+                                        Message(
+                                            role=f"tool_use[ID={tool_use_id}]",
+                                            content=tool_response,
+                                            embedding=self.text_embedder.embed_text(
+                                                tool_response
+                                            ),
+                                        )
+                                    )
                                     console.log(f"\n[dim]{tool_response}[/dim]")
                                 else:
-                                    self.conversation_manager.add_message(Message(role=f"tool_use[tool_name={action.tool.tool_name} ID={uuid4()}]", content="User denied tool execution."))
+                                    self.conversation_manager.add_message(
+                                        Message(
+                                            role=f"tool_use[tool_name={action.tool.tool_name} ID={uuid4()}]",
+                                            content="User denied tool execution.",
+                                        )
+                                    )
                                     continue
                     else:
                         self.conversation_manager.finalize()
                         final_output = response
                         break
             except ValidationError as e:
-                self.conversation_manager.add_message(Message(role=f"user", content="Validation Error! Provider a plan in proper json format."))
-        
+                self.conversation_manager.add_message(
+                    Message(
+                        role=f"user",
+                        content="Validation Error! Provider a plan in proper json format.",
+                    )
+                )
+
         return final_output
 
     def _ask_approval(self, action: Action) -> bool | str:
@@ -194,12 +245,12 @@ class PlanActObserveAgent(BaseAgent):
             return True
 
         result = choice(
-            message=f"Agent wants to execute a tool: {tool_name}({tool_params}). Do you approve?",
+            message=f"Agent wants to execute a tool: {tool_name}({json.dumps(tool_params, indent=4, default=str)}). Do you approve?",
             options=[
                 ("y", "Approve"),
                 ("n", "Deny"),
                 ("s", "Approve and remember my choice for this session"),
-                ("c", "Deny and tell what to do")
+                ("c", "Deny and tell what to do"),
             ],
             default="n",
         )

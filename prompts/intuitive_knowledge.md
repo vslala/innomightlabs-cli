@@ -32,6 +32,8 @@ To generate a plan follow the following schema strictly in json:
 
 {{iteration_count}}
 
+{{todos}}
+
 # Assigned Goal / Prompt
 
 {{current_user_message}}
