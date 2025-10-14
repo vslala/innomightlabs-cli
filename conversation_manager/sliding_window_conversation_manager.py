@@ -43,9 +43,7 @@ class SlidingWindowConversationManager(BaseConversationManager):
         self.messages.append(message)
 
     def fetch_conversation(self, window_size: int = 50) -> list[Message]:
-        filtered_messages = [
-            msg for msg in self.messages if msg.role not in {"system"}
-        ]
+        filtered_messages = [msg for msg in self.messages if msg.role not in {"system"}]
         return filtered_messages[-window_size:]
 
     def finalize(self) -> None:
@@ -60,10 +58,10 @@ class SlidingWindowConversationManager(BaseConversationManager):
             return
 
         serialized: list[str] = [
-            message.model_dump_json() 
+            message.model_dump_json()
             for message in list(filter(lambda msg: msg.role != "system", new_messages))
         ]
-        
+
         file_exists = os.path.exists(self._conversation_file)
         needs_leading_newline = False
         if file_exists and os.path.getsize(self._conversation_file) > 0:

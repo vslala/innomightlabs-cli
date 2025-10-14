@@ -28,7 +28,7 @@ class TokenAwareConversationManager(BaseConversationManager):
 
     def __init__(
         self,
-        max_tokens: int = 4000,
+        max_tokens: int = 120000,
         model: str = "gpt-3.5-turbo",
         overflow_strategy: OverflowStrategy = OverflowStrategy.DROP_OLDEST,
         reserve_tokens: int = 500,  # Reserve for system messages and response
@@ -196,7 +196,6 @@ class TokenAwareConversationManager(BaseConversationManager):
         messages_to_keep: List[Message] = []
         messages_to_summarize: List[Message] = []
 
-
         # Work backwards from newest messages
         temp_tokens = 0
         for message in reversed(self.messages):
@@ -250,5 +249,3 @@ class TokenAwareConversationManager(BaseConversationManager):
         Recalculate total token count.
         """
         self.total_tokens = sum(self.count_message_tokens(msg) for msg in self.messages)
-
-

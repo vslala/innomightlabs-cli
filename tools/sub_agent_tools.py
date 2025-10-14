@@ -13,10 +13,11 @@ intuitive_knowledge = read_file("prompts/intuitive_knowledge.md")
 agent = PlanActObserveAgent(
     system_prompt=system_instructions,
     intuitive_knowledge=intuitive_knowledge,
-    conversation_manager=container.in_memory_conversation_manager(),
+    conversation_manager=container.in_memory_token_aware_conversation_manager(),
     text_embedder=container.text_embedder(),
-    tools=fs_tools + [shell_command]
+    tools=fs_tools + [shell_command],
 )
+
 
 @Tool
 def plan_act_observe_subagent(prompt: str) -> str:
@@ -32,4 +33,3 @@ def plan_act_observe_subagent(prompt: str) -> str:
         str: The output of the said task in the format it is asked for
     """
     return agent.send_message(user_message=prompt)
-    
