@@ -13,7 +13,8 @@ TODO_FILE = f"{ROOT}/.krishna/todos.json"
 TodoStatus = Literal["pending", "in_progress", "completed", "cancelled"]
 TodoPriority = Literal["low", "medium", "high"]
 TodoMode = Literal[
-    "create", "complete", "modify_status", "modify_priority", "list", "delete"
+    "create", "complete", "modify_status", "modify_priority", "list", "delete",
+    "bulk_delete", "bulk_complete", "bulk_modify_status", "bulk_modify_priority"
 ]
 
 
@@ -143,7 +144,7 @@ def todo_manager(
     mode: Annotated[
         str,
         Field(
-            description="Operation mode: create, complete, modify_status, modify_priority, list, delete"
+            description="Operation mode: create, complete, modify_status, modify_priority, list, delete, bulk_delete, bulk_complete, bulk_modify_status, bulk_modify_priority"
         ),
     ],
     content: Annotated[
@@ -155,6 +156,9 @@ def todo_manager(
     ] = None,
     todo_id: Annotated[
         Optional[str], Field(description="Todo ID for modify/delete operations")
+    ] = None,
+    todo_ids: Annotated[
+        Optional[List[str]], Field(description="List of todo IDs for bulk operations")
     ] = None,
     status: Annotated[
         Optional[str],
@@ -192,9 +196,15 @@ def todo_manager(
 
         todo_id: Unique identifier for existing todo
             - Required for: complete, modify_status, modify_priority, delete
-            - Optional for: create, list
+            - Optional for: create, list, bulk operations
             - Supports partial ID matching (first 8+ characters)
             - Validation: Must match exactly one existing todo
+
+        todo_ids: List of todo IDs for bulk operations
+            - Required for: bulk_delete, bulk_complete, bulk_modify_status, bulk_modify_priority
+            - Optional for: all other modes
+            - Supports partial ID matching (first 8+ characters)
+            - Validation: Must be non-empty list with valid todo IDs
 
         status: Todo status value
             - Required for: modify_status
@@ -231,6 +241,13 @@ def todo_manager(
         # MODIFY_STATUS - Change status
         todo_manager(mode="modify_status", todo_id="a1b2c3d4", status="in_progress")
         todo_manager(mode="modify_status", todo_id="a1b2", status="cancelled")
+        # BULK OPERATIONS - Work with multiple todos
+        todo_manager(mode="bulk_complete", todo_ids=["a1b2c3d4", "e5f6g7h8"])  # Mark multiple as completed
+        todo_manager(mode="bulk_delete", todo_ids=["a1b2", "e5f6"])  # Delete multiple todos
+        todo_manager(mode="bulk_modify_status", todo_ids=["a1b2c3d4", "e5f6g7h8"], status="in_progress")
+        todo_manager(mode="bulk_modify_priority", todo_ids=["a1b2", "e5f6"], priority="high")
+
+
 
         # MODIFY_PRIORITY - Change priority
         todo_manager(mode="modify_priority", todo_id="a1b2c3d4", priority="high")
@@ -274,7 +291,12 @@ def todo_manager(
         "modify_priority",
         "list",
         "delete",
+        "bulk_delete",
+        "bulk_complete",
+        "bulk_modify_status",
+        "bulk_modify_priority",
     ]
+    
     valid_statuses = ["pending", "in_progress", "completed", "cancelled"]
     valid_priorities = ["low", "medium", "high"]
 
@@ -429,6 +451,126 @@ def todo_manager(
             _save_todos(todos)
 
             return f"🗑️ Todo deleted successfully!\nDeleted: {_format_todo(todo)}"
+        # BULK OPERATIONS
+        elif mode in ["bulk_complete", "bulk_delete", "bulk_modify_status", "bulk_modify_priority"]:
+            # Validate todo_ids parameter
+            if not todo_ids or len(todo_ids) == 0:
+                return f"❌ Error: todo_ids parameter is required and cannot be empty for {mode} mode."
+            
+            # Find all matching todos
+            found_todos = []
+            not_found_ids = []
+            invalid_ids = []
+            
+            for todo_id_input in todo_ids:
+                if not todo_id_input or not todo_id_input.strip():
+                    invalid_ids.append("<empty>")
+                    continue
+                    
+                try:
+                    found_todo = _find_todo_by_id(todos, todo_id_input.strip())
+                    if found_todo:
+                        found_todos.append((found_todo, todo_id_input.strip()))
+                    else:
+                        not_found_ids.append(todo_id_input.strip())
+                except ValueError as e:
+                    invalid_ids.append(f"{todo_id_input.strip()} ({str(e)})")
+            
+            # Report any issues with todo IDs
+            error_messages = []
+            if invalid_ids:
+                error_messages.append(f"Invalid IDs: {', '.join(invalid_ids)}")
+            if not_found_ids:
+                error_messages.append(f"Not found: {', '.join(not_found_ids)}")
+            
+            if not found_todos:
+                if error_messages:
+                    return f"❌ No valid todos found. {' | '.join(error_messages)}"
+                else:
+                    return "❌ No valid todos found."
+            
+            # Perform bulk operations
+            if mode == "bulk_complete":
+                success_count = 0
+                results = []
+                
+                for todo, original_id in found_todos:
+                    old_status = todo.get("status")
+                    todo["status"] = "completed"
+                    success_count += 1
+                    results.append(f"  • {_format_todo(todo)} (was: {old_status})")
+                
+                _save_todos(todos)
+                
+                summary = f"✅ Marked {success_count} todo(s) as completed!"
+                if error_messages:
+                    summary += f"\n⚠️  Issues: {' | '.join(error_messages)}"
+                summary += f"\n\nCompleted todos:\n" + "\n".join(results)
+                return summary
+            
+            elif mode == "bulk_delete":
+                success_count = 0
+                results = []
+                
+                # Remove todos (in reverse order to avoid index issues)
+                for todo, original_id in reversed(found_todos):
+                    results.append(f"  • {_format_todo(todo)}")
+                    todos.remove(todo)
+                    success_count += 1
+                
+                _save_todos(todos)
+                
+                summary = f"🗑️ Deleted {success_count} todo(s)!"
+                if error_messages:
+                    summary += f"\n⚠️  Issues: {' | '.join(error_messages)}"
+                summary += f"\n\nDeleted todos:\n" + "\n".join(reversed(results))
+                return summary
+            
+            elif mode == "bulk_modify_status":
+                if not status or status not in valid_statuses:
+                    return f"❌ Invalid status '{status}'. Valid options: {', '.join(valid_statuses)}"
+                
+                success_count = 0
+                results = []
+                
+                for todo, original_id in found_todos:
+                    old_status = todo.get("status")
+                    todo["status"] = status
+                    success_count += 1
+                    results.append(f"  • {_format_todo(todo)} (was: {old_status})")
+                
+                _save_todos(todos)
+                
+                summary = f"✅ Updated status to '{status}' for {success_count} todo(s)!"
+                if error_messages:
+                    summary += f"\n⚠️  Issues: {' | '.join(error_messages)}"
+                summary += f"\n\nUpdated todos:\n" + "\n".join(results)
+                return summary
+            
+            elif mode == "bulk_modify_priority":
+                if not priority or priority not in valid_priorities:
+                    return f"❌ Invalid priority '{priority}'. Valid options: {', '.join(valid_priorities)}"
+                
+                success_count = 0
+                results = []
+                
+                for todo, original_id in found_todos:
+                    old_priority = todo.get("priority", "medium")
+                    todo["priority"] = priority
+                    success_count += 1
+                    results.append(f"  • {_format_todo(todo)} (was: {old_priority})")
+                
+                _save_todos(todos)
+                
+                summary = f"✅ Updated priority to '{priority}' for {success_count} todo(s)!"
+                if error_messages:
+                    summary += f"\n⚠️  Issues: {' | '.join(error_messages)}"
+                summary += f"\n\nUpdated todos:\n" + "\n".join(results)
+                return summary
+            
+            # This should never be reached if bulk modes are handled correctly
+            else:
+                return f"❌ Unhandled bulk mode '{mode}'. This should not happen."
 
         # This should never be reached due to mode validation above, but added for type safety
         else:
