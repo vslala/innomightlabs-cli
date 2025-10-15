@@ -6,6 +6,11 @@ dist/
 wheels/
 *.egg-info
 
+# PyInstaller artifacts
+.pyinstaller/
+.pyinstaller_cache/
+.pyinstaller_temp/
+
 # Virtual environments
 .venv
 
