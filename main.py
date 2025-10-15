@@ -17,7 +17,7 @@ from conversation_manager.sliding_window_conversation_manager import (
     SlidingWindowConversationManager,
 )
 from text_embedding.ollama_text_embedder import OllamaTextEmbedder
-from tools.file_system_tool import fs_tools
+from tools.file_system_tool import fs_find, fs_read, fs_search, fs_tools
 from tools.shell_tool import shell_command
 from common.utils import console, read_file
 from common.containers import container

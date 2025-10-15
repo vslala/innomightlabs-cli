@@ -8,7 +8,9 @@ from rich.console import Console
 from rich.prompt import Prompt
 from loguru import logger
 
-ROOT = Path(os.environ["PROJECT_ROOT"]).resolve()
+# Get the project root directory relative to this file
+# This works both in development and PyInstaller bundles
+ROOT = Path(__file__).parent.parent.resolve()
 console = Console()
 
 log_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS zz}</green> | <level>{level: <8}</level> | <yellow>Line {line: >4} ({file}):</yellow> <b>{message}</b>"
@@ -121,14 +123,55 @@ def extract_user_facing_text(raw_reply: str, action_json: str | None) -> str:
 
 
 def read_file(path: str) -> str:
-    if os.path.exists(path=f"{ROOT}/{path}"):
-        with open(path, "r") as f:
+    """Read a file with package-relative path resolution.
+    
+    This function supports both absolute paths and relative paths.
+    Relative paths are resolved relative to the project root directory.
+    This works both in development and when bundled with PyInstaller.
+    
+    Args:
+        path (str): File path, can be relative to project root or absolute
+        
+    Returns:
+        str: Contents of the file
+        
+    Raises:
+        FileNotFoundError: If the file cannot be found
+        IOError: If the file cannot be read
+    """
+    file_path = Path(path)
+    
+    # If it's already an absolute path, use it as-is
+    if file_path.is_absolute():
+        resolved_path = file_path
+    else:
+        # Resolve relative to project root
+        resolved_path = ROOT / path
+    
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as f:
             return f.read()
+    except FileNotFoundError:
+        # Try fallback: resolve relative to current working directory
+        # This helps with backward compatibility
+        fallback_path = Path.cwd() / path
+        if fallback_path.exists():
+            with open(fallback_path, "r", encoding="utf-8") as f:
+                return f.read()
+        raise FileNotFoundError(f"File not found: {path} (tried {resolved_path} and {fallback_path})")
 
-    console.log(f"Path Not Found: {ROOT}/{path}")
-    return ""
 
 
 def write_file(path: str, content: str) -> None:
-    with open(f"{ROOT}/.krishna/{path}", "w") as f:
+    """Write a file to the .krishna directory with package-relative path resolution.
+    
+    Args:
+        path (str): File path relative to .krishna directory
+        content (str): Content to write to the file
+    """
+    krishna_dir = ROOT / ".krishna"
+    krishna_dir.mkdir(exist_ok=True)
+    
+    file_path = krishna_dir / path
+    with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)

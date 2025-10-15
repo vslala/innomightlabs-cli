@@ -13,10 +13,15 @@ dependencies = [
     "rich>=14.1.0",
     "tiktoken>=0.12.0",
 ]
+[project.scripts]
+innomightlabs-cli = "main:main"
+
+
 
 [dependency-groups]
 dev = [
     "mypy>=1.18.2",
+    "pyinstaller>=6.16.0",
     "types-requests>=2.32.4.20250913",
 ]
 
