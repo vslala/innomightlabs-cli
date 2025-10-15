@@ -1,5 +1,6 @@
 import json
 import uuid
+from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Dict, List, Literal, Optional
@@ -16,6 +17,20 @@ TodoMode = Literal[
     "create", "complete", "modify_status", "modify_priority", "list", "delete",
     "bulk_delete", "bulk_complete", "bulk_modify_status", "bulk_modify_priority"
 ]
+VALID_MODES = [
+    "create",
+    "complete",
+    "modify_status",
+    "modify_priority",
+    "list",
+    "delete",
+    "bulk_delete",
+    "bulk_complete",
+    "bulk_modify_status",
+    "bulk_modify_priority",
+]
+VALID_STATUSES = ["pending", "in_progress", "completed", "cancelled"]
+VALID_PRIORITIES = ["low", "medium", "high"]
 
 
 def _load_todos() -> List[Dict[str, Any]]:
@@ -108,6 +123,26 @@ def _find_todo_by_id(
     return None
 
 
+def resolve_by_short_or_full_id(
+    todos: List[Dict[str, Any]], todo_id: str
+) -> Optional[Dict[str, Any]]:
+    """Resolve a todo by full UUID, unique prefix, or first segment before the hyphen."""
+    found = _find_todo_by_id(todos, todo_id)
+    if found:
+        return found
+
+    short_matches = [
+        item
+        for item in todos
+        if item.get("id", "").split("-", 1)[0] == todo_id
+    ]
+    if len(short_matches) > 1:
+        raise ValueError(f"Multiple todos match '{todo_id}'. Be more specific.")
+    if len(short_matches) == 1:
+        return short_matches[0]
+    return None
+
+
 def _format_todo(todo: Dict[str, Any]) -> str:
     """Format a single todo for display.
 
@@ -137,6 +172,419 @@ def _format_todo(todo: Dict[str, Any]) -> str:
     )
 
     return f"{status_icon}{priority_icon} [{todo.get('id', 'unknown')[:8]}] {todo.get('content', 'No content')} (Created: {created_at})"
+
+
+class TodoTaskModeInterface(ABC):
+    """Strategy interface for todo operations."""
+
+    def __init__(
+        self,
+        *,
+        todos: List[Dict[str, Any]],
+        mode: str,
+        content: Optional[str],
+        tasks: Optional[List[str]],
+        todo_id: Optional[str],
+        todo_ids: Optional[List[str]],
+        status: Optional[str],
+        priority: Optional[str],
+        filter_status: Optional[str],
+    ) -> None:
+        self.todos = todos
+        self.mode = mode
+        self.content = content
+        self.tasks = tasks
+        self.todo_id = todo_id
+        self.todo_ids = todo_ids
+        self.status = status
+        self.priority = priority
+        self.filter_status = filter_status
+
+    @staticmethod
+    def _strip(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @abstractmethod
+    def validate(self) -> str:
+        """Validate input parameters and return an error message or empty string."""
+
+    @abstractmethod
+    def execute(self) -> str:
+        """Execute the operation and return the result description."""
+
+
+class CreateTodoTask(TodoTaskModeInterface):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._created_todos: List[Dict[str, Any]] = []
+        self._single_content: Optional[str] = None
+        self._task_contents: List[str] = []
+        self._todo_priority: str = "medium"
+
+    def validate(self) -> str:
+        content_stripped = self._strip(self.content)
+        tasks_list = self.tasks if self.tasks is not None else []
+        has_content = bool(content_stripped)
+        has_tasks = bool(tasks_list)
+
+        if not has_content and not has_tasks:
+            return "❌ Error: Either 'content' or 'tasks' must be provided for create mode."
+
+        if has_content and has_tasks:
+            return "❌ Error: Provide either 'content' for single todo or 'tasks' for multiple todos, not both."
+
+        self._todo_priority = (
+            self.priority if self.priority in VALID_PRIORITIES else "medium"
+        )
+
+        if has_content:
+            self._single_content = content_stripped
+            return ""
+
+        # Validate tasks list
+        cleaned_tasks: List[str] = []
+        for task in tasks_list:
+            task_stripped = self._strip(task)
+            if not task or not task_stripped:
+                return "❌ Error: All tasks must be non-empty strings."
+            cleaned_tasks.append(task_stripped)
+
+        self._task_contents = cleaned_tasks
+        return ""
+
+    def execute(self) -> str:
+        created_at = datetime.now(timezone.utc).isoformat()
+        if self._single_content:
+            new_todo = {
+                "id": str(uuid.uuid4()),
+                "content": self._single_content,
+                "status": "pending",
+                "priority": self._todo_priority,
+                "created_at": created_at,
+            }
+            self.todos.append(new_todo)
+            self._created_todos.append(new_todo)
+        else:
+            for task_content in self._task_contents:
+                new_todo = {
+                    "id": str(uuid.uuid4()),
+                    "content": task_content,
+                    "status": "pending",
+                    "priority": self._todo_priority,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                self.todos.append(new_todo)
+                self._created_todos.append(new_todo)
+
+        _save_todos(self.todos)
+
+        if len(self._created_todos) == 1:
+            return (
+                f"✅ Todo created successfully!\n{_format_todo(self._created_todos[0])}"
+            )
+
+        formatted_todos = [_format_todo(todo) for todo in self._created_todos]
+        return (
+            f"✅ {len(self._created_todos)} todos created successfully!\n\n"
+            + "\n".join(formatted_todos)
+        )
+
+
+class ListTodoTask(TodoTaskModeInterface):
+    def validate(self) -> str:
+        if not self.todos:
+            return "📝 No todos found. Create your first todo to get started!"
+        if self.filter_status:
+            if self.filter_status not in VALID_STATUSES:
+                return (
+                    f"❌ Invalid status filter '{self.filter_status}'. "
+                    f"Valid options: {', '.join(VALID_STATUSES)}"
+                )
+        return ""
+
+    def execute(self) -> str:
+        if self.filter_status:
+            todos_to_show = [
+                todo for todo in self.todos if todo.get("status") == self.filter_status
+            ]
+            if not todos_to_show:
+                return f"📝 No todos found with status '{self.filter_status}'."
+            header = (
+                f"📋 Todos with status '{self.filter_status}' "
+                f"({len(todos_to_show)} items):"
+            )
+        else:
+            todos_to_show = self.todos
+            header = f"📋 All Todos ({len(todos_to_show)} items):"
+
+        priority_order = {"high": 0, "medium": 1, "low": 2}
+        todos_to_show.sort(
+            key=lambda x: (
+                priority_order.get(x.get("priority", "medium"), 1),
+                -int(datetime.fromisoformat(x.get("created_at", "")).timestamp()),
+            )
+        )
+
+        formatted_todos = [_format_todo(todo) for todo in todos_to_show]
+        return f"{header}\n\n" + "\n".join(formatted_todos)
+
+
+class TodoIdTask(TodoTaskModeInterface, ABC):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.todo_item: Optional[Dict[str, Any]] = None
+        self.todo_identifier: Optional[str] = None
+
+    def validate(self) -> str:
+        if not self.todos:
+            return "📝 No todos found. Create some todos first!"
+        if not self.todo_id or not self.todo_id.strip():
+            return f"❌ Error: Todo ID is required for {self.mode} mode."
+
+        identifier = self.todo_id.strip()
+        try:
+            todo = self.resolve_todo(identifier)
+        except ValueError as exc:
+            return f"❌ {str(exc)}"
+
+        if not todo:
+            return f"❌ Todo with ID '{self.todo_id}' not found."
+
+        self.todo_item = todo
+        self.todo_identifier = identifier
+        return ""
+
+    def resolve_todo(self, todo_id: str) -> Optional[Dict[str, Any]]:
+        return resolve_by_short_or_full_id(self.todos, todo_id)
+
+
+class CompleteTodoTask(TodoIdTask):
+    def execute(self) -> str:
+        assert self.todo_item is not None
+        old_status = self.todo_item.get("status")
+        self.todo_item["status"] = "completed"
+        _save_todos(self.todos)
+        return (
+            f"✅ Todo marked as completed!\nPrevious status: '{old_status}'\n"
+            f"{_format_todo(self.todo_item)}"
+        )
+
+
+class ModifyStatusTodoTask(TodoIdTask):
+    def validate(self) -> str:
+        base_result = super().validate()
+        if base_result:
+            return base_result
+        if not self.status or self.status not in VALID_STATUSES:
+            return (
+                f"❌ Invalid status '{self.status}'. "
+                f"Valid options: {', '.join(VALID_STATUSES)}"
+            )
+        return ""
+
+    def execute(self) -> str:
+        assert self.todo_item is not None and self.status is not None
+        old_status = self.todo_item.get("status")
+        self.todo_item["status"] = self.status
+        _save_todos(self.todos)
+        return (
+            f"✅ Todo status updated from '{old_status}' to '{self.status}'!\n"
+            f"{_format_todo(self.todo_item)}"
+        )
+
+
+class ModifyPriorityTodoTask(TodoIdTask):
+    def validate(self) -> str:
+        base_result = super().validate()
+        if base_result:
+            return base_result
+        if not self.priority or self.priority not in VALID_PRIORITIES:
+            return (
+                f"❌ Invalid priority '{self.priority}'. "
+                f"Valid options: {', '.join(VALID_PRIORITIES)}"
+            )
+        return ""
+
+    def execute(self) -> str:
+        assert self.todo_item is not None and self.priority is not None
+        old_priority = self.todo_item.get("priority", "medium")
+        self.todo_item["priority"] = self.priority
+        _save_todos(self.todos)
+        return (
+            f"✅ Todo priority updated from '{old_priority}' to '{self.priority}'!\n"
+            f"{_format_todo(self.todo_item)}"
+        )
+
+
+class DeleteTodoTask(TodoIdTask):
+    def execute(self) -> str:
+        assert self.todo_item is not None
+        self.todos.remove(self.todo_item)
+        _save_todos(self.todos)
+        return f"🗑️ Todo deleted successfully!\nDeleted: {_format_todo(self.todo_item)}"
+
+
+class BulkTodoIdTask(TodoTaskModeInterface, ABC):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.found_todos: List[tuple[Dict[str, Any], str]] = []
+        self.error_messages: List[str] = []
+
+    def validate(self) -> str:
+        if not self.todo_ids or len(self.todo_ids) == 0:
+            return f"❌ Error: todo_ids parameter is required and cannot be empty for {self.mode} mode."
+
+        found_todos: List[tuple[Dict[str, Any], str]] = []
+        invalid_ids: List[str] = []
+        not_found_ids: List[str] = []
+
+        for todo_id_input in self.todo_ids:
+            if not todo_id_input or not todo_id_input.strip():
+                invalid_ids.append("<empty>")
+                continue
+
+            identifier = todo_id_input.strip()
+            try:
+                todo = self.resolve_todo(identifier)
+            except ValueError as exc:
+                invalid_ids.append(f"{identifier} ({str(exc)})")
+                continue
+
+            if todo:
+                found_todos.append((todo, identifier))
+            else:
+                not_found_ids.append(identifier)
+
+        error_messages: List[str] = []
+        if invalid_ids:
+            error_messages.append(f"Invalid IDs: {', '.join(invalid_ids)}")
+        if not_found_ids:
+            error_messages.append(f"Not found: {', '.join(not_found_ids)}")
+
+        if not found_todos:
+            if error_messages:
+                return f"❌ No valid todos found. {' | '.join(error_messages)}"
+            return "❌ No valid todos found."
+
+        self.found_todos = found_todos
+        self.error_messages = error_messages
+        return ""
+
+    def resolve_todo(self, todo_id: str) -> Optional[Dict[str, Any]]:
+        return resolve_by_short_or_full_id(self.todos, todo_id)
+
+
+class BulkCompleteTodoTask(BulkTodoIdTask):
+    def execute(self) -> str:
+        success_count = 0
+        results: List[str] = []
+
+        for todo, original_id in self.found_todos:
+            old_status = todo.get("status")
+            todo["status"] = "completed"
+            success_count += 1
+            results.append(f"  • {_format_todo(todo)} (was: {old_status})")
+
+        _save_todos(self.todos)
+
+        summary = f"✅ Marked {success_count} todo(s) as completed!"
+        if self.error_messages:
+            summary += f"\n⚠️  Issues: {' | '.join(self.error_messages)}"
+        summary += f"\n\nCompleted todos:\n" + "\n".join(results)
+        return summary
+
+
+class BulkDeleteTodoTask(BulkTodoIdTask):
+    def resolve_todo(self, todo_id: str) -> Optional[Dict[str, Any]]:
+        return resolve_by_short_or_full_id(self.todos, todo_id)
+
+    def execute(self) -> str:
+        success_count = 0
+        results: List[str] = []
+
+        for todo, original_id in reversed(self.found_todos):
+            results.append(f"  • {_format_todo(todo)}")
+            self.todos.remove(todo)
+            success_count += 1
+
+        _save_todos(self.todos)
+
+        summary = f"🗑️ Deleted {success_count} todo(s)!"
+        if self.error_messages:
+            summary += f"\n⚠️  Issues: {' | '.join(self.error_messages)}"
+        summary += f"\n\nDeleted todos:\n" + "\n".join(reversed(results))
+        return summary
+
+
+class BulkModifyStatusTodoTask(BulkTodoIdTask):
+    def validate(self) -> str:
+        base_result = super().validate()
+        if base_result:
+            return base_result
+        if not self.status or self.status not in VALID_STATUSES:
+            return (
+                f"❌ Invalid status '{self.status}'. "
+                f"Valid options: {', '.join(VALID_STATUSES)}"
+            )
+        return ""
+
+    def execute(self) -> str:
+        assert self.status is not None
+        success_count = 0
+        results: List[str] = []
+
+        for todo, original_id in self.found_todos:
+            old_status = todo.get("status")
+            todo["status"] = self.status
+            success_count += 1
+            results.append(f"  • {_format_todo(todo)} (was: {old_status})")
+
+        _save_todos(self.todos)
+
+        summary = (
+            f"✅ Updated status to '{self.status}' for {success_count} todo(s)!"
+        )
+        if self.error_messages:
+            summary += f"\n⚠️  Issues: {' | '.join(self.error_messages)}"
+        summary += f"\n\nUpdated todos:\n" + "\n".join(results)
+        return summary
+
+
+class BulkModifyPriorityTodoTask(BulkTodoIdTask):
+    def validate(self) -> str:
+        base_result = super().validate()
+        if base_result:
+            return base_result
+        if not self.priority or self.priority not in VALID_PRIORITIES:
+            return (
+                f"❌ Invalid priority '{self.priority}'. "
+                f"Valid options: {', '.join(VALID_PRIORITIES)}"
+            )
+        return ""
+
+    def execute(self) -> str:
+        assert self.priority is not None
+        success_count = 0
+        results: List[str] = []
+
+        for todo, original_id in self.found_todos:
+            old_priority = todo.get("priority", "medium")
+            todo["priority"] = self.priority
+            success_count += 1
+            results.append(f"  • {_format_todo(todo)} (was: {old_priority})")
+
+        _save_todos(self.todos)
+
+        summary = (
+            f"✅ Updated priority to '{self.priority}' for {success_count} todo(s)!"
+        )
+        if self.error_messages:
+            summary += f"\n⚠️  Issues: {' | '.join(self.error_messages)}"
+        summary += f"\n\nUpdated todos:\n" + "\n".join(results)
+        return summary
 
 
 @Tool
@@ -284,297 +732,45 @@ def todo_manager(
         - Todo IDs are UUIDs but only first 8 chars shown in display
         - Supports partial ID matching for convenience (e.g., "a1b2c3d4" matches "a1b2")
     """
-    valid_modes = [
-        "create",
-        "complete",
-        "modify_status",
-        "modify_priority",
-        "list",
-        "delete",
-        "bulk_delete",
-        "bulk_complete",
-        "bulk_modify_status",
-        "bulk_modify_priority",
-    ]
-    
-    valid_statuses = ["pending", "in_progress", "completed", "cancelled"]
-    valid_priorities = ["low", "medium", "high"]
-
-    if mode not in valid_modes:
-        return f"❌ Invalid mode '{mode}'. Valid modes: {', '.join(valid_modes)}"
+    if mode not in VALID_MODES:
+        return f"❌ Invalid mode '{mode}'. Valid modes: {', '.join(VALID_MODES)}"
 
     try:
         todos = _load_todos()
+        task_classes: Dict[str, type[TodoTaskModeInterface]] = {
+            "create": CreateTodoTask,
+            "list": ListTodoTask,
+            "complete": CompleteTodoTask,
+            "modify_status": ModifyStatusTodoTask,
+            "modify_priority": ModifyPriorityTodoTask,
+            "delete": DeleteTodoTask,
+            "bulk_complete": BulkCompleteTodoTask,
+            "bulk_delete": BulkDeleteTodoTask,
+            "bulk_modify_status": BulkModifyStatusTodoTask,
+            "bulk_modify_priority": BulkModifyPriorityTodoTask,
+        }
 
-        # CREATE MODE
-        if mode == "create":
-            # Validate input: either content or tasks must be provided
-            has_content = content and content.strip()
-            has_tasks = tasks and len(tasks) > 0
+        task_class = task_classes.get(mode)
+        if task_class is None:
+            return f"❌ Unhandled mode '{mode}'. This mode is not supported."
 
-            if not has_content and not has_tasks:
-                return "❌ Error: Either 'content' or 'tasks' must be provided for create mode."
+        task = task_class(
+            todos=todos,
+            mode=mode,
+            content=content,
+            tasks=tasks,
+            todo_id=todo_id,
+            todo_ids=todo_ids,
+            status=status,
+            priority=priority,
+            filter_status=filter_status,
+        )
 
-            if has_content and has_tasks:
-                return "❌ Error: Provide either 'content' for single todo or 'tasks' for multiple todos, not both."
+        validation_message = task.validate()
+        if validation_message:
+            return validation_message
 
-            # Set default priority if not provided
-            todo_priority = priority if priority in valid_priorities else "medium"
-            created_todos = []
-
-            # Handle single content creation
-            if has_content:
-                new_todo = {
-                    "id": str(uuid.uuid4()),
-                    "content": content.strip() if content else "",
-                    "status": "pending",
-                    "priority": todo_priority,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-                todos.append(new_todo)
-                created_todos.append(new_todo)
-
-            # Handle multiple tasks creation
-            elif has_tasks:
-                for task in tasks or []:
-                    if not task or not task.strip():
-                        return "❌ Error: All tasks must be non-empty strings."
-
-                    new_todo = {
-                        "id": str(uuid.uuid4()),
-                        "content": task.strip(),
-                        "status": "pending",
-                        "priority": todo_priority,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                    todos.append(new_todo)
-                    created_todos.append(new_todo)
-
-            _save_todos(todos)
-
-            # Return summary of created todos
-            if len(created_todos) == 1:
-                return (
-                    f"✅ Todo created successfully!\n{_format_todo(created_todos[0])}"
-                )
-            else:
-                formatted_todos = [_format_todo(todo) for todo in created_todos]
-                return (
-                    f"✅ {len(created_todos)} todos created successfully!\n\n"
-                    + "\n".join(formatted_todos)
-                )
-
-        # LIST MODE
-        elif mode == "list":
-            if not todos:
-                return "📝 No todos found. Create your first todo to get started!"
-
-            # Filter by status if provided
-            if filter_status:
-                if filter_status not in valid_statuses:
-                    return f"❌ Invalid status filter '{filter_status}'. Valid options: {', '.join(valid_statuses)}"
-
-                filtered_todos = [
-                    todo for todo in todos if todo.get("status") == filter_status
-                ]
-
-                if not filtered_todos:
-                    return f"📝 No todos found with status '{filter_status}'."
-
-                header = f"📋 Todos with status '{filter_status}' ({len(filtered_todos)} items):"
-                todos_to_show = filtered_todos
-            else:
-                header = f"📋 All Todos ({len(todos)} items):"
-                todos_to_show = todos
-
-            # Sort by priority (high to low) then by creation date (newest first)
-            priority_order = {"high": 0, "medium": 1, "low": 2}
-            todos_to_show.sort(
-                key=lambda x: (
-                    priority_order.get(x.get("priority", "medium"), 1),
-                    -int(datetime.fromisoformat(x.get("created_at", "")).timestamp()),
-                )
-            )
-
-            formatted_todos = [_format_todo(todo) for todo in todos_to_show]
-
-            return f"{header}\n\n" + "\n".join(formatted_todos)
-
-        # All other modes require todos to exist
-        if not todos:
-            return "📝 No todos found. Create some todos first!"
-
-        # All other modes require todo_id
-        if not todo_id or not todo_id.strip():
-            return f"❌ Error: Todo ID is required for {mode} mode."
-
-        # Find the todo
-        try:
-            todo = _find_todo_by_id(todos, todo_id.strip())
-            if not todo:
-                return f"❌ Todo with ID '{todo_id}' not found."
-        except ValueError as e:
-            return f"❌ {str(e)}"
-
-        # COMPLETE MODE (shortcut for setting status to completed)
-        if mode == "complete":
-            old_status = todo.get("status")
-            todo["status"] = "completed"
-            _save_todos(todos)
-            return f"✅ Todo marked as completed!\nPrevious status: '{old_status}'\n{_format_todo(todo)}"
-
-        # MODIFY_STATUS MODE
-        elif mode == "modify_status":
-            if not status or status not in valid_statuses:
-                return f"❌ Invalid status '{status}'. Valid options: {', '.join(valid_statuses)}"
-
-            old_status = todo.get("status")
-            todo["status"] = status
-            _save_todos(todos)
-
-            return f"✅ Todo status updated from '{old_status}' to '{status}'!\n{_format_todo(todo)}"
-
-        # MODIFY_PRIORITY MODE
-        elif mode == "modify_priority":
-            if not priority or priority not in valid_priorities:
-                return f"❌ Invalid priority '{priority}'. Valid options: {', '.join(valid_priorities)}"
-
-            old_priority = todo.get("priority", "medium")
-            todo["priority"] = priority
-            _save_todos(todos)
-
-            return f"✅ Todo priority updated from '{old_priority}' to '{priority}'!\n{_format_todo(todo)}"
-
-        # DELETE MODE
-        elif mode == "delete":
-            todos.remove(todo)
-            _save_todos(todos)
-
-            return f"🗑️ Todo deleted successfully!\nDeleted: {_format_todo(todo)}"
-        # BULK OPERATIONS
-        elif mode in ["bulk_complete", "bulk_delete", "bulk_modify_status", "bulk_modify_priority"]:
-            # Validate todo_ids parameter
-            if not todo_ids or len(todo_ids) == 0:
-                return f"❌ Error: todo_ids parameter is required and cannot be empty for {mode} mode."
-            
-            # Find all matching todos
-            found_todos = []
-            not_found_ids = []
-            invalid_ids = []
-            
-            for todo_id_input in todo_ids:
-                if not todo_id_input or not todo_id_input.strip():
-                    invalid_ids.append("<empty>")
-                    continue
-                    
-                try:
-                    found_todo = _find_todo_by_id(todos, todo_id_input.strip())
-                    if found_todo:
-                        found_todos.append((found_todo, todo_id_input.strip()))
-                    else:
-                        not_found_ids.append(todo_id_input.strip())
-                except ValueError as e:
-                    invalid_ids.append(f"{todo_id_input.strip()} ({str(e)})")
-            
-            # Report any issues with todo IDs
-            error_messages = []
-            if invalid_ids:
-                error_messages.append(f"Invalid IDs: {', '.join(invalid_ids)}")
-            if not_found_ids:
-                error_messages.append(f"Not found: {', '.join(not_found_ids)}")
-            
-            if not found_todos:
-                if error_messages:
-                    return f"❌ No valid todos found. {' | '.join(error_messages)}"
-                else:
-                    return "❌ No valid todos found."
-            
-            # Perform bulk operations
-            if mode == "bulk_complete":
-                success_count = 0
-                results = []
-                
-                for todo, original_id in found_todos:
-                    old_status = todo.get("status")
-                    todo["status"] = "completed"
-                    success_count += 1
-                    results.append(f"  • {_format_todo(todo)} (was: {old_status})")
-                
-                _save_todos(todos)
-                
-                summary = f"✅ Marked {success_count} todo(s) as completed!"
-                if error_messages:
-                    summary += f"\n⚠️  Issues: {' | '.join(error_messages)}"
-                summary += f"\n\nCompleted todos:\n" + "\n".join(results)
-                return summary
-            
-            elif mode == "bulk_delete":
-                success_count = 0
-                results = []
-                
-                # Remove todos (in reverse order to avoid index issues)
-                for todo, original_id in reversed(found_todos):
-                    results.append(f"  • {_format_todo(todo)}")
-                    todos.remove(todo)
-                    success_count += 1
-                
-                _save_todos(todos)
-                
-                summary = f"🗑️ Deleted {success_count} todo(s)!"
-                if error_messages:
-                    summary += f"\n⚠️  Issues: {' | '.join(error_messages)}"
-                summary += f"\n\nDeleted todos:\n" + "\n".join(reversed(results))
-                return summary
-            
-            elif mode == "bulk_modify_status":
-                if not status or status not in valid_statuses:
-                    return f"❌ Invalid status '{status}'. Valid options: {', '.join(valid_statuses)}"
-                
-                success_count = 0
-                results = []
-                
-                for todo, original_id in found_todos:
-                    old_status = todo.get("status")
-                    todo["status"] = status
-                    success_count += 1
-                    results.append(f"  • {_format_todo(todo)} (was: {old_status})")
-                
-                _save_todos(todos)
-                
-                summary = f"✅ Updated status to '{status}' for {success_count} todo(s)!"
-                if error_messages:
-                    summary += f"\n⚠️  Issues: {' | '.join(error_messages)}"
-                summary += f"\n\nUpdated todos:\n" + "\n".join(results)
-                return summary
-            
-            elif mode == "bulk_modify_priority":
-                if not priority or priority not in valid_priorities:
-                    return f"❌ Invalid priority '{priority}'. Valid options: {', '.join(valid_priorities)}"
-                
-                success_count = 0
-                results = []
-                
-                for todo, original_id in found_todos:
-                    old_priority = todo.get("priority", "medium")
-                    todo["priority"] = priority
-                    success_count += 1
-                    results.append(f"  • {_format_todo(todo)} (was: {old_priority})")
-                
-                _save_todos(todos)
-                
-                summary = f"✅ Updated priority to '{priority}' for {success_count} todo(s)!"
-                if error_messages:
-                    summary += f"\n⚠️  Issues: {' | '.join(error_messages)}"
-                summary += f"\n\nUpdated todos:\n" + "\n".join(results)
-                return summary
-            
-            # This should never be reached if bulk modes are handled correctly
-            else:
-                return f"❌ Unhandled bulk mode '{mode}'. This should not happen."
-
-        # This should never be reached due to mode validation above, but added for type safety
-        else:
-            return f"❌ Unhandled mode '{mode}'. This should not happen."
+        return task.execute()
 
     except Exception as e:
         return f"❌ An error occurred: {str(e)}"
