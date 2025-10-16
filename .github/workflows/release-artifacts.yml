@@ -33,11 +33,6 @@ jobs:
             display_name: macOS 14 (arm64)
             exec_path: dist/innomightlabs-cli
             archive_kind: tar.gz
-          - runner: windows-latest
-            os_label: windows-x64
-            display_name: Windows (x64)
-            exec_path: dist\\innomightlabs-cli.exe
-            archive_kind: zip
 
     steps:
       - name: Checkout repository

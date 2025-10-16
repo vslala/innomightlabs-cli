@@ -7,7 +7,7 @@ from conversation_manager.token_aware_conversation_manager import (
     TokenAwareConversationManager,
 )
 from text_embedding.ollama_text_embedder import OllamaTextEmbedder
-from common.file_watcher.manager import WatchdogFileWatcherManager
+
 
 
 class KrishnaAgentContainer(containers.DeclarativeContainer):
@@ -36,7 +36,7 @@ class KrishnaAgentContainer(containers.DeclarativeContainer):
 
     text_embedder = providers.Singleton(OllamaTextEmbedder)
 
-    file_watcher_manager = providers.Singleton(WatchdogFileWatcherManager)
+
 
 
 container = KrishnaAgentContainer()
