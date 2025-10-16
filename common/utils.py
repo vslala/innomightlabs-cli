@@ -53,10 +53,13 @@ def tree(
 def last_commits(n: int = 5) -> str:
     if shutil.which("git") is None:
         return "Git is not installed or not found in PATH."
-
-    cmd = ["git", "log", f"-n{n}", "--pretty=format:%h | %an | %ar | %s"]
-    out = subprocess.check_output(cmd, text=True)
-    return out.strip()
+    
+    try:
+        cmd = ["git", "log", f"-n{n}", "--pretty=format:%h | %an | %ar | %s"]
+        out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
+        return out.strip()
+    except subprocess.CalledProcessError:
+        return "Not in a git repository or no commits found."
 
 
 def extract_json_from_text(text: str) -> str:
