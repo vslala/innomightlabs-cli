@@ -9,8 +9,12 @@ import os
 import subprocess
 import shutil
 import argparse
+import tarfile
+import hashlib
+import tempfile
+from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 # ANSI color codes for cross-platform colored output
 class Colors:
@@ -174,9 +178,21 @@ class BuildManager:
         cmd.append(str(self.spec_file))
         
         # Run the build
+        env = os.environ.copy()
+        pyinstaller_base = self.project_root / ".pyinstaller"
+        config_dir = pyinstaller_base / "config"
+        cache_dir = pyinstaller_base / "cache"
+        temp_dir = pyinstaller_base / "temp"
+        for directory in (config_dir, cache_dir, temp_dir):
+            directory.mkdir(parents=True, exist_ok=True)
+
+        env.setdefault("PYINSTALLER_CONFIG_DIR", str(config_dir))
+        env.setdefault("PYINSTALLER_CACHE_DIR", str(cache_dir))
+        env.setdefault("PYINSTALLER_TEMP_DIR", str(temp_dir))
+
         try:
             self.print_step(f"Running: {' '.join(cmd)}")
-            subprocess.run(cmd, check=True)
+            subprocess.run(cmd, check=True, env=env)
             self.print_success("PyInstaller build completed successfully")
             return True
         except subprocess.CalledProcessError as e:
@@ -204,6 +220,141 @@ class BuildManager:
                         
         self.print_error("Could not find built executable")
         return None
+
+    def package_artifacts(
+        self,
+        executable: Path,
+        artifact_name: Optional[str] = None,
+        output_dir: Optional[Path] = None,
+    ) -> Tuple[Path, Path]:
+        """Create a compressed archive and checksum for the built executable."""
+        if not executable.exists():
+            raise FileNotFoundError(f"Executable not found at {executable}")
+
+        if output_dir is None:
+            output_dir = self.project_root / "release"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if artifact_name is None:
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            artifact_name = f"innomightlabs-cli-macos-arm64-{timestamp}"
+
+        archive_path = output_dir / f"{artifact_name}.tar.gz"
+        checksum_path = output_dir / f"{artifact_name}.sha256"
+
+        self.print_step(f"Creating artifact archive at {archive_path}")
+        with tarfile.open(archive_path, "w:gz") as tar:
+            tar.add(executable, arcname="innomightlabs-cli")
+
+        self.print_step(f"Generating SHA256 checksum at {checksum_path}")
+        sha256_hash = hashlib.sha256()
+        with archive_path.open("rb") as artifact_file:
+            for chunk in iter(lambda: artifact_file.read(8192), b""):
+                sha256_hash.update(chunk)
+        checksum_path.write_text(f"{sha256_hash.hexdigest()}  {archive_path.name}\n")
+
+        self.print_success("Artifact packaging completed")
+        return archive_path, checksum_path
+
+    def create_artifact_only_release(
+        self,
+        artifacts: List[Path],
+        branch_name: Optional[str] = None,
+        tag_name: Optional[str] = None,
+        commit_message: Optional[str] = None,
+        push: bool = False,
+    ) -> None:
+        """Create an orphan branch that contains only the provided artifacts."""
+        if not artifacts:
+            raise ValueError("No artifacts provided for release branch creation.")
+
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        branch_name = branch_name or (f"artifacts/{tag_name}" if tag_name else f"artifacts/{timestamp}")
+        commit_message = commit_message or f"Artifact release {tag_name or timestamp}"
+
+        with tempfile.TemporaryDirectory(prefix="artifact_release_") as temp_dir:
+            temp_path = Path(temp_dir)
+
+            subprocess.run(
+                ["git", "clone", "--no-checkout", str(self.project_root), str(temp_path)],
+                cwd=self.project_root,
+                check=True,
+            )
+
+            subprocess.run(
+                ["git", "checkout", "--orphan", branch_name],
+                cwd=temp_path,
+                check=True,
+            )
+
+            for item in temp_path.iterdir():
+                if item.name == ".git":
+                    continue
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+
+            release_dir = temp_path / "release"
+            release_dir.mkdir(parents=True, exist_ok=True)
+
+            for artifact in artifacts:
+                shutil.copy2(artifact, release_dir / artifact.name)
+
+            subprocess.run(["git", "add", "release"], cwd=temp_path, check=True)
+            subprocess.run(["git", "commit", "-m", commit_message], cwd=temp_path, check=True)
+
+            commit_hash = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=temp_path,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(self.project_root),
+                    "fetch",
+                    str(temp_path),
+                    f"{branch_name}:{branch_name}",
+                ],
+                check=True,
+            )
+
+            if tag_name:
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(self.project_root),
+                        "tag",
+                        "-a",
+                        tag_name,
+                        "-m",
+                        commit_message,
+                        commit_hash,
+                    ],
+                    check=True,
+                )
+
+            if push:
+                subprocess.run(
+                    ["git", "-C", str(self.project_root), "push", "-u", "origin", branch_name],
+                    check=True,
+                )
+                if tag_name:
+                    subprocess.run(
+                        ["git", "-C", str(self.project_root), "push", "origin", tag_name],
+                        check=True,
+                    )
+
+            self.print_success(
+                f"Created artifact-only branch '{branch_name}'"
+                + (f" with tag '{tag_name}'" if tag_name else "")
+            )
         
     def show_build_info(self, exe_path: Path) -> None:
         """Show information about the built executable"""
@@ -274,6 +425,7 @@ Examples:
   %(prog)s --clean            # Clean build artifacts first
   %(prog)s --dev --clean      # Clean development build
   %(prog)s --release --clean  # Clean release build
+  %(prog)s --artifact-release --artifact-tag v0.2.0  # Build and create artifact-only tag
 '''
     )
     
@@ -303,11 +455,42 @@ Examples:
         action='store_true',
         help='Only clean build artifacts, do not build'
     )
+
+    parser.add_argument(
+        '--artifact-release',
+        action='store_true',
+        help='Build and create an artifact-only git branch (and optional tag)'
+    )
+    parser.add_argument(
+        '--artifact-name',
+        type=str,
+        help='Base name for the generated artifact archive (defaults to timestamped name)'
+    )
+    parser.add_argument(
+        '--artifact-branch',
+        type=str,
+        help='Name of the orphan branch to create for artifacts (defaults to artifacts/<tag|timestamp>)'
+    )
+    parser.add_argument(
+        '--artifact-tag',
+        type=str,
+        help='Optional git tag to create that points to the artifact-only commit'
+    )
+    parser.add_argument(
+        '--artifact-message',
+        type=str,
+        help='Custom commit message for the artifact-only branch'
+    )
+    parser.add_argument(
+        '--push-artifact',
+        action='store_true',
+        help='Push the artifact branch (and tag) to origin after creation'
+    )
     
     args = parser.parse_args()
     
     # Determine build type - defaults to development if neither is specified
-    if args.release:
+    if args.release or args.artifact_release:
         build_type = 'release'
     else:
         build_type = 'development'  # Default to development (covers both --dev and no flag)
@@ -322,6 +505,38 @@ Examples:
         builder.cleanup_build_artifacts()
         builder.print_success("Cleanup completed")
         return 0
+
+    if args.artifact_release:
+        try:
+            success = builder.build(clean=args.clean)
+            if not success:
+                return 1
+
+            exe_path = builder.find_executable()
+            if exe_path is None:
+                return 1
+
+            artifact_archive, artifact_checksum = builder.package_artifacts(
+                exe_path,
+                artifact_name=args.artifact_name,
+            )
+
+            builder.create_artifact_only_release(
+                artifacts=[artifact_archive, artifact_checksum],
+                branch_name=args.artifact_branch,
+                tag_name=args.artifact_tag,
+                commit_message=args.artifact_message,
+                push=args.push_artifact,
+            )
+
+            builder.print_success("Artifact release workflow completed")
+            return 0
+        except KeyboardInterrupt:
+            builder.print_warning("\nArtifact release interrupted by user")
+            return 1
+        except Exception as exc:
+            builder.print_error(f"Artifact release failed: {exc}")
+            return 1
         
     # Run the build
     try:
