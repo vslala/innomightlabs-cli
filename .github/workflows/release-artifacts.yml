@@ -1,0 +1,153 @@
+name: Build Cross-Platform Release Artifacts
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag_override:
+        description: "Optional tag to build artifacts for (e.g. v1.0.0)"
+        required: false
+        type: string
+
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            os_label: ubuntu22.04
+            display_name: Ubuntu 22.04
+            exec_path: dist/innomightlabs-cli
+            archive_kind: tar.gz
+          - runner: ubuntu-24.04
+            os_label: ubuntu24.04
+            display_name: Ubuntu 24.04
+            exec_path: dist/innomightlabs-cli
+            archive_kind: tar.gz
+          - runner: macos-14
+            os_label: macos-arm64
+            display_name: macOS 14 (arm64)
+            exec_path: dist/innomightlabs-cli
+            archive_kind: tar.gz
+          - runner: windows-latest
+            os_label: windows-x64
+            display_name: Windows (x64)
+            exec_path: dist\\innomightlabs-cli.exe
+            archive_kind: zip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release tag
+        id: release_tag
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.tag_override }}" != "" ]]; then
+            TAG="${{ github.event.inputs.tag_override }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          if [[ -z "$TAG" ]]; then
+            echo "Release tag could not be determined." >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Using release tag: $TAG"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install system dependencies (Linux)
+        if: startsWith(runner.os, 'Linux')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl pkg-config libssl-dev
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            pyinstaller \
+            dependency-injector \
+            "langchain-aws>=0.2.35" \
+            loguru \
+            ollama \
+            prompt-toolkit \
+            rich \
+            "tiktoken>=0.12.0"
+
+      - name: Build executable
+        run: |
+          python build.py --release --clean
+
+      - name: Ensure executable permissions (Unix)
+        if: runner.os != 'Windows'
+        run: chmod +x ${{ matrix.exec_path }}
+
+      - name: Package artifact
+        id: package
+        shell: python
+        env:
+          EXEC_PATH: ${{ matrix.exec_path }}
+          ARTIFACT_ROOT: innomightlabs-cli-${{ matrix.os_label }}
+          ARCHIVE_KIND: ${{ matrix.archive_kind }}
+        run: |
+          import hashlib
+          import os
+          import pathlib
+          import tarfile
+          import zipfile
+
+          exec_path = pathlib.Path(os.environ["EXEC_PATH"])
+          if not exec_path.exists():
+              raise SystemExit(f"Executable not found at {exec_path}")
+
+          artifact_root = os.environ["ARTIFACT_ROOT"]
+          archive_kind = os.environ["ARCHIVE_KIND"].lower()
+
+          if archive_kind == "zip":
+              archive_path = pathlib.Path(f"{artifact_root}.zip")
+              with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                  zf.write(exec_path, arcname=exec_path.name)
+          else:
+              archive_path = pathlib.Path(f"{artifact_root}.tar.gz")
+              with tarfile.open(archive_path, "w:gz") as tar:
+                  tar.add(exec_path, arcname=exec_path.name)
+
+          checksum_path = archive_path.parent / f"{archive_path.name}.sha256"
+          sha = hashlib.sha256()
+          with archive_path.open("rb") as fh:
+              for chunk in iter(lambda: fh.read(8192), b""):
+                  sha.update(chunk)
+          checksum_path.write_text(f"{sha.hexdigest()}  {archive_path.name}\n")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as gh:
+              gh.write(f"artifact={archive_path}\n")
+              gh.write(f"checksum={checksum_path}\n")
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: innomightlabs-cli-${{ matrix.os_label }}
+          path: |
+            ${{ steps.package.outputs.artifact }}
+            ${{ steps.package.outputs.checksum }}
+          retention-days: 14
+
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          files: |
+            ${{ steps.package.outputs.artifact }}
+            ${{ steps.package.outputs.checksum }}

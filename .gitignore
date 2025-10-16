@@ -10,7 +10,7 @@ wheels/
 .pyinstaller/
 .pyinstaller_cache/
 .pyinstaller_temp/
-release
+release/
 
 # Virtual environments
 .venv
