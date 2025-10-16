@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# PyInstaller artifacts
+.pyinstaller/
+.pyinstaller_cache/
+.pyinstaller_temp/
+
+# Virtual environments
+.venv
+
+# User Specific Files
+.envrc
+CLAUDE.md
+PROJECTS_UPDATEES.
+.krishna
+KRISHNA_CONTEXT.md

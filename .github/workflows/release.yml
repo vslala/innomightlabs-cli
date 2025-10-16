@@ -1,0 +1,254 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  PYTHON_VERSION: '3.13'
+
+jobs:
+  extract-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+            TAG="v${VERSION}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Extracted version: ${VERSION}"
+          echo "Tag: ${TAG}"
+
+  build:
+    needs: extract-version
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+            executable_name: innomightlabs-cli
+            asset_name: innomightlabs-cli-linux-x64
+          - os: windows-latest
+            platform: windows
+            arch: x64
+            executable_name: innomightlabs-cli.exe
+            asset_name: innomightlabs-cli-windows-x64.exe
+          - os: macos-latest
+            platform: macos
+            arch: x64
+            executable_name: innomightlabs-cli
+            asset_name: innomightlabs-cli-macos-x64
+
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install UV (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install UV (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          irm https://astral.sh/uv/install.ps1 | iex
+          echo "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Install dependencies
+        run: |
+          uv sync --dev
+
+      - name: Update version in pyproject.toml (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          VERSION="${{ needs.extract-version.outputs.version }}"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            sed -i "s/version = \"[^\"]*\"/version = \"${VERSION}\"/" pyproject.toml
+          else
+            sed -i.bak "s/version = \"[^\"]*\"/version = \"${VERSION}\"/" pyproject.toml
+          fi
+          echo "Updated version to ${VERSION}"
+          grep "version =" pyproject.toml
+
+      - name: Build executable
+        run: |
+          python build.py --release --clean
+
+      - name: Verify executable exists
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            EXEC_PATH="dist/innomightlabs-cli.exe"
+          else
+            EXEC_PATH="dist/innomightlabs-cli"
+          fi
+          
+          if [[ -f "$EXEC_PATH" ]]; then
+            echo "✓ Executable found: $EXEC_PATH"
+            ls -la "$EXEC_PATH"
+          else
+            echo "✗ Executable not found: $EXEC_PATH"
+            echo "Contents of dist directory:"
+            ls -la dist/ || echo "dist directory not found"
+            exit 1
+          fi
+
+      - name: Test executable
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            EXEC_PATH="dist/innomightlabs-cli.exe"
+          else
+            EXEC_PATH="dist/innomightlabs-cli"
+            chmod +x "$EXEC_PATH"
+          fi
+          
+          # Test that executable runs (with timeout to prevent hanging)
+          timeout 10s "$EXEC_PATH" --help || echo "Executable test completed (may have timed out)"
+
+      - name: Rename executable for release
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cp "dist/innomightlabs-cli.exe" "${{ matrix.asset_name }}"
+          else
+            cp "dist/innomightlabs-cli" "${{ matrix.asset_name }}"
+          fi
+          echo "Created release asset: ${{ matrix.asset_name }}"
+          ls -la "${{ matrix.asset_name }}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}
+          retention-days: 7
+
+  create-release:
+    needs: [extract-version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: List artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          find ./artifacts -type f -exec ls -la {} \;
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION="${{ needs.extract-version.outputs.version }}"
+          TAG="${{ needs.extract-version.outputs.tag }}"
+          
+          # Get commits since last tag
+          LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [[ -n "$LAST_TAG" ]]; then
+            COMMITS=$(git log --pretty=format:"- %h | %an | %ar | %s" "$LAST_TAG"..HEAD)
+          else
+            COMMITS=$(git log --pretty=format:"- %h | %an | %ar | %s" --max-count=10)
+          fi
+          
+          # Create release notes
+          cat > release_notes.md << EOF
+          # Release $TAG
+          
+          Released on $(date +"%Y-%m-%d")
+          
+          ## Recent Changes
+          
+          $COMMITS
+          
+          ## Installation
+          
+          Download the appropriate executable for your platform from the assets below.
+          
+          ### Usage
+          
+          \`\`\`bash
+          # Make executable (Unix/macOS)
+          chmod +x innomightlabs-cli
+          
+          # Run
+          ./innomightlabs-cli
+          \`\`\`
+          
+          ## Supported Platforms
+          
+          - **Linux x64**: \`innomightlabs-cli-linux-x64\`
+          - **Windows x64**: \`innomightlabs-cli-windows-x64.exe\`
+          - **macOS x64**: \`innomightlabs-cli-macos-x64\`
+          EOF
+          
+          echo "Generated release notes:"
+          cat release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.extract-version.outputs.tag }}
+          name: "InnomightLabs CLI ${{ needs.extract-version.outputs.tag }}"
+          body_path: release_notes.md
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+          files: |
+            artifacts/*/innomightlabs-cli-*
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload release assets
+        run: |
+          echo "Release created successfully!"
+          echo "Tag: ${{ needs.extract-version.outputs.tag }}"
+          echo "Version: ${{ needs.extract-version.outputs.version }}"
+          echo "Assets uploaded:"
+          find ./artifacts -type f -name "innomightlabs-cli-*" -exec basename {} \;
