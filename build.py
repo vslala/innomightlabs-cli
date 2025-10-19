@@ -30,7 +30,7 @@ class Colors:
     END = '\033[0m'
 
     @staticmethod
-    def disable_colors():
+    def disable_colors() -> None:
         """Disable colors for non-terminal environments"""
         for attr in dir(Colors):
             if not attr.startswith('_') and attr != 'disable_colors':
@@ -412,7 +412,7 @@ class BuildManager:
             return False
 
 
-def main():
+def main() -> int:
     """Main entry point"""
     parser = argparse.ArgumentParser(
         description='Build script for InnomightLabs CLI',

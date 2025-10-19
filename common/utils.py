@@ -8,10 +8,24 @@ from rich.console import Console
 from rich.prompt import Prompt
 from loguru import logger
 
+__all__ = [
+    "ROOT",
+    "console", 
+    "logger",
+    "tree",
+    "last_commits",
+    "extract_json_from_text",
+    "extract_user_facing_text",
+    "read_file"
+]
+
 # Get the project root directory relative to this file
 # This works both in development and PyInstaller bundles
 ROOT = Path(__file__).parent.parent.resolve()
 console = Console()
+
+# Remove Loguru's default stdout sink to prevent terminal output
+logger.remove()
 
 log_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS zz}</green> | <level>{level: <8}</level> | <yellow>Line {line: >4} ({file}):</yellow> <b>{message}</b>"
 logger.add(
