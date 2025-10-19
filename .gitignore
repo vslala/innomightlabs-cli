@@ -21,3 +21,14 @@ CLAUDE.md
 PROJECTS_UPDATEES.
 .krishna
 KRISHNA_CONTEXT.md
+
+
+# Testing artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+coverage.xml
+*.cover
+.hypothesis/
+tests/__pycache__/
