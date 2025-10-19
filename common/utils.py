@@ -2,11 +2,19 @@ import os
 import json
 import subprocess
 import shutil
+import io
+import datetime
+import platform
 from typing import Generator, Optional
 from pathlib import Path
 from rich.console import Console
 from rich.prompt import Prompt
 from loguru import logger
+try:
+    from PIL import ImageGrab, Image
+except ImportError:
+    ImageGrab = None  # type: ignore
+    Image = None  # type: ignore
 
 __all__ = [
     "ROOT",
@@ -16,7 +24,9 @@ __all__ = [
     "last_commits",
     "extract_json_from_text",
     "extract_user_facing_text",
-    "read_file"
+    "read_file",
+    "write_file",
+    "ClipboardManager"
 ]
 
 # Get the project root directory relative to this file
@@ -192,3 +202,138 @@ def write_file(path: str, content: str) -> None:
     file_path = krishna_dir / path
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
+
+
+
+class ClipboardManager:
+    """Cross-platform clipboard management utility class."""
+    
+    @staticmethod
+    def get_text() -> str | None:
+        """Get text content from clipboard across platforms.
+        
+        Returns:
+            str | None: Text content from clipboard or None if no text found
+        """
+        try:
+            # Try platform-specific text clipboard methods
+            if platform.system() == "Darwin":  # macOS
+                result = subprocess.run(
+                    ["pbpaste"], 
+                    capture_output=True, 
+                    text=True, 
+                    check=False
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return result.stdout
+            elif platform.system() == "Windows":
+                try:
+                    import win32clipboard  # type: ignore
+                    win32clipboard.OpenClipboard()
+                    try:
+                        if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_TEXT):
+                            data: str = win32clipboard.GetClipboardData(win32clipboard.CF_TEXT)
+                            return data
+                    finally:
+                        win32clipboard.CloseClipboard()
+                except ImportError:
+                    pass
+            else:  # Linux
+                result = subprocess.run(
+                    ["xclip", "-selection", "clipboard", "-o"], 
+                    capture_output=True, 
+                    text=True, 
+                    check=False
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return result.stdout
+        except Exception as e:
+            logger.debug(f"Failed to get text from clipboard: {e}")
+        return None
+    
+    @staticmethod
+    def get_image() -> bytes | None:
+        """Get image content from clipboard using PIL ImageGrab across all platforms.
+        
+        Returns:
+            bytes | None: Image data as bytes or None if no image found
+        """
+        if ImageGrab is None or Image is None:
+            logger.debug("PIL not available for clipboard image operations")
+            return None
+            
+        try:
+            logger.debug("Checking clipboard for images...", extra={"markup": True})
+            clipboard_content = ImageGrab.grabclipboard()
+            
+            if clipboard_content is None:
+                logger.debug("No image found in clipboard")
+                return None
+            
+            # ImageGrab.grabclipboard() can return Image | list[str] | None
+            # We only want Image objects, not list[str] (file paths)
+            if isinstance(clipboard_content, list):
+                logger.debug("Clipboard contains file paths, not image data")
+                return None
+                
+            # Type guard: at this point clipboard_content should be an Image
+            if not hasattr(clipboard_content, 'save'):
+                logger.debug("Clipboard content is not a valid image")
+                return None
+                
+            img = clipboard_content  # Now we know it's an Image
+            logger.debug(f"Image found in clipboard: {img.size} pixels, mode: {img.mode}")
+            
+            # Convert image to bytes
+            img_bytes = io.BytesIO()
+            
+            # Handle different image modes
+            if img.mode in ('RGBA', 'LA', 'P'):
+                # Convert to RGB for JPEG compatibility, keep PNG for transparency
+                if img.mode == 'P' and 'transparency' in img.info:
+                    img = img.convert('RGBA')
+                img.save(img_bytes, format='PNG')
+            else:
+                img.save(img_bytes, format='PNG')
+                
+            img_data = img_bytes.getvalue()
+            logger.debug(f"Image converted to {len(img_data)} bytes")
+            return img_data
+            
+        except ImportError as e:
+            logger.debug(f"PIL not available: {e}")
+            return None
+        except Exception as e:
+            logger.debug(f"Failed to get image from clipboard: {e}")
+            return None
+    
+    @staticmethod
+    def save_image(image_bytes: bytes) -> str:
+        """Save clipboard image bytes to filesystem.
+        
+        Args:
+            image_bytes: Raw image data as bytes
+            
+        Returns:
+            str: Path to saved image file
+            
+        Raises:
+            RuntimeError: If image save fails
+        """
+        try:
+            # Create clipboard images directory
+            clipboard_dir = ROOT / ".krishna" / "clipboard_images"
+            clipboard_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Generate timestamp-based filename
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            image_path = clipboard_dir / f"clipboard_{timestamp}.png"
+            
+            # Save image to file
+            with open(image_path, 'wb') as f:
+                f.write(image_bytes)
+                
+            return str(image_path)
+            
+        except Exception as e:
+            raise RuntimeError(f"Error saving clipboard image: {str(e)}")
