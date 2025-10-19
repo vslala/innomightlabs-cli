@@ -1,11 +1,12 @@
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import patch, Mock
 from prompt_toolkit.formatted_text import FormattedText
 
 
 class TestMainModule:
     """Test cases for main.py module functions."""
 
-    def test_build_bottom_toolbar(self, mock_planner_agent):
+    def test_build_bottom_toolbar(self, mock_planner_agent: Mock) -> None:
         """Test that build_bottom_toolbar returns proper FormattedText with usage metrics."""
         # Given: 
         # Set up mock agent usage data
@@ -40,7 +41,7 @@ class TestMainModule:
         assert '100' in toolbar_text  # input tokens
         assert '50' in toolbar_text   # output tokens
 
-    def test_display_banner(self, mock_planner_agent, capsys):
+    def test_display_banner(self, mock_planner_agent: Mock, capsys: Any) -> None:
         """Test that display_banner outputs welcome content."""
         # Import main after fixture is set up
         import main
@@ -62,7 +63,7 @@ class TestMainModule:
 
     @patch('main.prompt')
     @patch('main.console')
-    def test_main_keyboard_interrupt(self, mock_console, mock_prompt, mock_planner_agent, capsys):
+    def test_main_keyboard_interrupt(self, mock_console: Mock, mock_prompt: Mock, mock_planner_agent: Mock, capsys: Any) -> None:
         """Test that KeyboardInterrupt causes graceful exit from main()."""
         # Import main after fixture is set up
         import main
@@ -83,7 +84,7 @@ class TestMainModule:
         mock_console.print.assert_called_with("\n\nGoodbye!", style="bold green")
     @patch('main.prompt')
     @patch('main.console')
-    def test_main_empty_input(self, mock_console, mock_prompt, mock_planner_agent, capsys):
+    def test_main_empty_input(self, mock_console: Mock, mock_prompt: Mock, mock_planner_agent: Mock, capsys: Any) -> None:
         """Test that empty inputs are skipped and don't call planner_agent.send_message."""
         # Import main after fixture is set up
         import main
@@ -104,7 +105,7 @@ class TestMainModule:
         mock_planner_agent.send_message.assert_not_called()
     @patch('main.prompt')
     @patch('main.console')
-    def test_main_happy_path(self, mock_console, mock_prompt, mock_planner_agent, capsys):
+    def test_main_happy_path(self, mock_console: Mock, mock_prompt: Mock, mock_planner_agent: Mock, capsys: Any) -> None:
         """Test normal user input flow with multiple interactions and agent responses."""
         # Import main after fixture is set up
         import main
@@ -134,7 +135,7 @@ class TestMainModule:
 
     @patch('main.prompt')
     @patch('main.console')
-    def test_main_eof_error(self, mock_console, mock_prompt, mock_planner_agent, capsys):
+    def test_main_eof_error(self, mock_console: Mock, mock_prompt: Mock, mock_planner_agent: Mock, capsys: Any) -> None:
         """Test Ctrl+D (EOFError) graceful exit handling."""
         # Import main after fixture is set up
         import main
@@ -159,7 +160,7 @@ class TestMainModule:
 
     @patch('main.prompt')
     @patch('main.console')
-    def test_main_exception_handling(self, mock_console, mock_prompt, mock_planner_agent, capsys):
+    def test_main_exception_handling(self, mock_console: Mock, mock_prompt: Mock, mock_planner_agent: Mock, capsys: Any) -> None:
         """Test error recovery when agent.send_message() raises exceptions."""
         # Import main after fixture is set up
         import main
@@ -189,7 +190,7 @@ class TestMainModule:
 
     @patch('main.prompt')
     @patch('main.console')
-    def test_agent_integration(self, mock_console, mock_prompt, mock_planner_agent, capsys):
+    def test_agent_integration(self, mock_console: Mock, mock_prompt: Mock, mock_planner_agent: Mock, capsys: Any) -> None:
         """Test direct agent mock interactions and response handling."""
         # Import main after fixture is set up
         import main
